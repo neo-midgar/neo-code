@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { normalizePullRequestWorktreeBranchPrefix } from "@t3tools/shared/git";
 
 import {
   getAppModelOptions,
@@ -70,5 +71,13 @@ describe("getSlashModelOptions", () => {
     const options = getSlashModelOptions("codex", ["openai/gpt-oss-120b"], "oss", "gpt-5.3-codex");
 
     expect(options.map((option) => option.slug)).toEqual(["openai/gpt-oss-120b"]);
+  });
+});
+
+describe("normalizePullRequestWorktreeBranchPrefix", () => {
+  it("sanitizes configured PR worktree branch prefixes", () => {
+    expect(normalizePullRequestWorktreeBranchPrefix(" Team Branches / Review ")).toBe(
+      "team-branches/review",
+    );
   });
 });

@@ -37,6 +37,17 @@ describe("GitPreparePullRequestThreadInput", () => {
     expect(parsed.reference).toBe("#42");
     expect(parsed.mode).toBe("worktree");
   });
+
+  it("accepts an optional branch prefix override", () => {
+    const parsed = decodePreparePullRequestThreadInput({
+      cwd: "/repo",
+      reference: "#42",
+      mode: "worktree",
+      branchPrefix: "team/review",
+    });
+
+    expect(parsed.branchPrefix).toBe("team/review");
+  });
 });
 
 describe("GitResolvePullRequestResult", () => {

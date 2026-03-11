@@ -9,6 +9,8 @@
 import {
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
+  GitObservePullRequestInput,
+  GitObservePullRequestResult,
   GitPullRequestRefInput,
   GitResolvePullRequestResult,
   GitRunStackedActionInput,
@@ -44,6 +46,13 @@ export interface GitManagerShape {
   readonly preparePullRequestThread: (
     input: GitPreparePullRequestThreadInput,
   ) => Effect.Effect<GitPreparePullRequestThreadResult, GitManagerServiceError>;
+
+  /**
+   * Observe an open pull request for the current branch or an explicit reference.
+   */
+  readonly observePullRequest: (
+    input: GitObservePullRequestInput,
+  ) => Effect.Effect<GitObservePullRequestResult, GitManagerServiceError>;
 
   /**
    * Run a stacked Git action (`commit`, `commit_push`, `commit_push_pr`).

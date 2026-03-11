@@ -1,6 +1,7 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
 import { type ProviderKind } from "@t3tools/contracts";
+import { normalizePullRequestWorktreeBranchPrefix } from "@t3tools/shared/git";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
@@ -23,6 +24,9 @@ const AppSettingsSchema = Schema.Struct({
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
+  ),
+  pullRequestWorktreeBranchPrefix: Schema.String.check(Schema.isMaxLength(128)).pipe(
+    Schema.withConstructorDefault(() => Option.some("t3code")),
   ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
@@ -71,6 +75,9 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
+    pullRequestWorktreeBranchPrefix: normalizePullRequestWorktreeBranchPrefix(
+      settings.pullRequestWorktreeBranchPrefix,
+    ),
   };
 }
 

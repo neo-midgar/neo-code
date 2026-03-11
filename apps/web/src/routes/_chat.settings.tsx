@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
@@ -7,7 +7,11 @@ import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverLinearConfigQueryOptions,
+  serverQueryKeys,
+} from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
 import { preferredTerminalEditor } from "../terminal-links";
 import { Button } from "../components/ui/button";
@@ -83,9 +87,13 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 function SettingsRouteView() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings } = useAppSettings();
+  const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverLinearConfigQuery = useQuery(serverLinearConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
+  const [linearApiKeyInput, setLinearApiKeyInput] = useState("");
+  const [linearApiKeyMessage, setLinearApiKeyMessage] = useState<string | null>(null);
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
@@ -98,6 +106,29 @@ function SettingsRouteView() {
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
+  const linearConfig = serverLinearConfigQuery.data ?? null;
+  const saveLinearApiKeyMutation = useMutation({
+    mutationFn: async (apiKey: string | null) => {
+      const api = ensureNativeApi();
+      return api.server.setLinearApiKey({ apiKey });
+    },
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearConfig() });
+      setLinearApiKeyInput("");
+      setLinearApiKeyMessage(
+        result.source === "env"
+          ? "Environment variable still takes precedence. The saved key was updated as fallback."
+          : result.configured
+            ? "Saved Linear API key on the server."
+            : "Cleared the saved Linear API key.",
+      );
+    },
+    onError: (error) => {
+      setLinearApiKeyMessage(
+        error instanceof Error ? error.message : "Failed to update the Linear API key.",
+      );
+    },
+  });
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -306,6 +337,84 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Linear Integration</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Save a Linear API key on the server so issue import and report-back work without
+                  setting shell environment variables.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                  Status:{" "}
+                  <span className="font-medium text-foreground">
+                    {linearConfig
+                      ? linearConfig.configured
+                        ? `Configured via ${linearConfig.source === "env" ? "environment" : "server settings"}`
+                        : "Not configured"
+                      : "Loading..."}
+                  </span>
+                </div>
+
+                <label htmlFor="linear-api-key" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Linear API key</span>
+                  <Input
+                    id="linear-api-key"
+                    type="password"
+                    autoComplete="off"
+                    value={linearApiKeyInput}
+                    onChange={(event) => {
+                      setLinearApiKeyInput(event.target.value);
+                      setLinearApiKeyMessage(null);
+                    }}
+                    placeholder={
+                      linearConfig?.configured
+                        ? "Enter a new key to replace the saved one"
+                        : "lin_api_..."
+                    }
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Stored on the server in your local app state directory, not in browser
+                    `localStorage`.
+                  </p>
+                </label>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={() => {
+                      void saveLinearApiKeyMutation.mutateAsync(
+                        linearApiKeyInput.trim().length > 0 ? linearApiKeyInput : null,
+                      );
+                    }}
+                    disabled={
+                      saveLinearApiKeyMutation.isPending || linearApiKeyInput.trim().length === 0
+                    }
+                  >
+                    {saveLinearApiKeyMutation.isPending ? "Saving..." : "Save Linear API key"}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => {
+                      void saveLinearApiKeyMutation.mutateAsync(null);
+                    }}
+                    disabled={saveLinearApiKeyMutation.isPending}
+                  >
+                    Clear saved key
+                  </Button>
+                </div>
+
+                {linearApiKeyMessage ? (
+                  <p className="text-xs text-muted-foreground">{linearApiKeyMessage}</p>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Models</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Save additional provider model slugs so they appear in the chat model picker and
@@ -434,6 +543,52 @@ function SettingsRouteView() {
                     </div>
                   );
                 })}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Git</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Customize generated Git naming defaults used by PR worktree preparation.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <label htmlFor="pr-worktree-branch-prefix" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">
+                    PR worktree branch prefix
+                  </span>
+                  <Input
+                    id="pr-worktree-branch-prefix"
+                    value={settings.pullRequestWorktreeBranchPrefix}
+                    onChange={(event) =>
+                      updateSettings({
+                        pullRequestWorktreeBranchPrefix: event.target.value,
+                      })
+                    }
+                    placeholder="t3code"
+                    spellCheck={false}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Used for generated fork PR worktree branches such as{" "}
+                    <code>{settings.pullRequestWorktreeBranchPrefix}/pr-42/main</code>.
+                  </span>
+                </label>
+
+                <div className="flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        pullRequestWorktreeBranchPrefix: defaults.pullRequestWorktreeBranchPrefix,
+                      })
+                    }
+                  >
+                    Reset Git defaults
+                  </Button>
+                </div>
               </div>
             </section>
 

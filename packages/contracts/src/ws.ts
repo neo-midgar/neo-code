@@ -15,6 +15,7 @@ import {
   GitCheckoutInput,
   GitCreateBranchInput,
   GitPreparePullRequestThreadInput,
+  GitObservePullRequestInput,
   GitCreateWorktreeInput,
   GitInitInput,
   GitListBranchesInput,
@@ -24,6 +25,12 @@ import {
   GitRunStackedActionInput,
   GitStatusInput,
 } from "./git";
+import {
+  LinearGetIssueInput,
+  LinearImportIssueInput,
+  LinearListProjectIssuesInput,
+  LinearReportThreadInput,
+} from "./linear";
 import {
   TerminalClearInput,
   TerminalCloseInput,
@@ -36,7 +43,12 @@ import {
 import { KeybindingRule } from "./keybindings";
 import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
-import { ServerConfigUpdatedPayload } from "./server";
+import {
+  ServerConfigUpdatedPayload,
+  ServerGetProjectLinearBindingInput,
+  ServerSetLinearApiKeyInput,
+  ServerSetProjectLinearBindingInput,
+} from "./server";
 
 // ── WebSocket RPC Method Names ───────────────────────────────────────
 
@@ -63,6 +75,14 @@ export const WS_METHODS = {
   gitInit: "git.init",
   gitResolvePullRequest: "git.resolvePullRequest",
   gitPreparePullRequestThread: "git.preparePullRequestThread",
+  gitObservePullRequest: "git.observePullRequest",
+
+  // Linear methods
+  linearGetIssue: "linear.getIssue",
+  linearListTeams: "linear.listTeams",
+  linearListProjectIssues: "linear.listProjectIssues",
+  linearImportIssue: "linear.importIssue",
+  linearReportThread: "linear.reportThread",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -74,6 +94,10 @@ export const WS_METHODS = {
 
   // Server meta
   serverGetConfig: "server.getConfig",
+  serverGetLinearConfig: "server.getLinearConfig",
+  serverGetProjectLinearBinding: "server.getProjectLinearBinding",
+  serverSetLinearApiKey: "server.setLinearApiKey",
+  serverSetProjectLinearBinding: "server.setProjectLinearBinding",
   serverUpsertKeybinding: "server.upsertKeybinding",
 } as const;
 
@@ -127,6 +151,14 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitInit, GitInitInput),
   tagRequestBody(WS_METHODS.gitResolvePullRequest, GitPullRequestRefInput),
   tagRequestBody(WS_METHODS.gitPreparePullRequestThread, GitPreparePullRequestThreadInput),
+  tagRequestBody(WS_METHODS.gitObservePullRequest, GitObservePullRequestInput),
+
+  // Linear methods
+  tagRequestBody(WS_METHODS.linearGetIssue, LinearGetIssueInput),
+  tagRequestBody(WS_METHODS.linearListTeams, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.linearListProjectIssues, LinearListProjectIssuesInput),
+  tagRequestBody(WS_METHODS.linearImportIssue, LinearImportIssueInput),
+  tagRequestBody(WS_METHODS.linearReportThread, LinearReportThreadInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),
@@ -138,6 +170,10 @@ const WebSocketRequestBody = Schema.Union([
 
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverGetLinearConfig, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverGetProjectLinearBinding, ServerGetProjectLinearBindingInput),
+  tagRequestBody(WS_METHODS.serverSetLinearApiKey, ServerSetLinearApiKeyInput),
+  tagRequestBody(WS_METHODS.serverSetProjectLinearBinding, ServerSetProjectLinearBindingInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 ]);
 

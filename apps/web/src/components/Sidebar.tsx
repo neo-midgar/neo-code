@@ -1,5 +1,6 @@
 import {
   ArrowLeftIcon,
+  BugIcon,
   ChevronRightIcon,
   FolderIcon,
   GitPullRequestIcon,
@@ -84,6 +85,7 @@ import { useThreadSelectionStore } from "../threadSelectionStore";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import { resolveThreadStatusPill, shouldClearThreadSelectionOnMouseDown } from "./Sidebar.logic";
+import { LinearIssueDialog } from "./LinearIssueDialog";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -291,6 +293,7 @@ export default function Sidebar() {
   const [isPickingFolder, setIsPickingFolder] = useState(false);
   const [isAddingProject, setIsAddingProject] = useState(false);
   const [addProjectError, setAddProjectError] = useState<string | null>(null);
+  const [linearIssueProjectId, setLinearIssueProjectId] = useState<ProjectId | null>(null);
   const addProjectInputRef = useRef<HTMLInputElement | null>(null);
   const [renamingThreadId, setRenamingThreadId] = useState<ThreadId | null>(null);
   const [renamingTitle, setRenamingTitle] = useState("");
@@ -909,9 +912,16 @@ export default function Sidebar() {
       const api = readNativeApi();
       if (!api) return;
       const clicked = await api.contextMenu.show(
-        [{ id: "delete", label: "Delete", destructive: true }],
+        [
+          { id: "import-linear", label: "Linear issues" },
+          { id: "delete", label: "Delete", destructive: true },
+        ],
         position,
       );
+      if (clicked === "import-linear") {
+        setLinearIssueProjectId(projectId);
+        return;
+      }
       if (clicked !== "delete") return;
 
       const project = projects.find((entry) => entry.id === projectId);
@@ -958,6 +968,7 @@ export default function Sidebar() {
       clearProjectDraftThreadId,
       getDraftThreadByProjectId,
       projects,
+      setLinearIssueProjectId,
       threads,
     ],
   );
@@ -1234,6 +1245,10 @@ export default function Sidebar() {
       return next;
     });
   }, []);
+  const linearIssueProject = useMemo(
+    () => projects.find((project) => project.id === linearIssueProjectId) ?? null,
+    [linearIssueProjectId, projects],
+  );
 
   const wordmark = (
     <div className="flex items-center gap-2">
@@ -1469,6 +1484,30 @@ export default function Sidebar() {
                                 {project.name}
                               </span>
                             </SidebarMenuButton>
+                            <Tooltip>
+                              <TooltipTrigger
+                                render={
+                                  <SidebarMenuAction
+                                    render={
+                                      <button
+                                        type="button"
+                                        aria-label={`Open Linear issues for ${project.name}`}
+                                      />
+                                    }
+                                    showOnHover
+                                    className="top-1 right-7 size-5 rounded-md p-0 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      setLinearIssueProjectId(project.id);
+                                    }}
+                                  >
+                                    <BugIcon className="size-3.5" />
+                                  </SidebarMenuAction>
+                                }
+                              />
+                              <TooltipPopup side="top">Linear issues</TooltipPopup>
+                            </Tooltip>
                             <Tooltip>
                               <TooltipTrigger
                                 render={
@@ -1733,6 +1772,24 @@ export default function Sidebar() {
               No projects yet
             </div>
           )}
+          {linearIssueProject ? (
+            <LinearIssueDialog
+              open
+              projectId={linearIssueProject.id}
+              projectName={linearIssueProject.name}
+              onOpenChange={(open) => {
+                if (!open) {
+                  setLinearIssueProjectId(null);
+                }
+              }}
+              onImported={(threadId) => {
+                void navigate({
+                  to: "/$threadId",
+                  params: { threadId: ThreadId.makeUnsafe(threadId) },
+                });
+              }}
+            />
+          ) : null}
         </SidebarGroup>
       </SidebarContent>
 

@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
+import { IsoDateTime, ProjectId, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
 import { ProviderKind } from "./orchestration";
@@ -63,6 +63,42 @@ export const ServerUpsertKeybindingResult = Schema.Struct({
   issues: ServerConfigIssues,
 });
 export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.Type;
+
+export const ServerLinearCredentialSource = Schema.Literals(["env", "saved", "none"]);
+export type ServerLinearCredentialSource = typeof ServerLinearCredentialSource.Type;
+
+export const ServerLinearConfig = Schema.Struct({
+  configured: Schema.Boolean,
+  source: ServerLinearCredentialSource,
+});
+export type ServerLinearConfig = typeof ServerLinearConfig.Type;
+
+export const ServerSetLinearApiKeyInput = Schema.Struct({
+  apiKey: Schema.NullOr(Schema.String.check(Schema.isMaxLength(4096))),
+});
+export type ServerSetLinearApiKeyInput = typeof ServerSetLinearApiKeyInput.Type;
+
+export const ServerLinearProjectBinding = Schema.Struct({
+  projectId: ProjectId,
+  teamId: TrimmedNonEmptyString,
+  teamKey: TrimmedNonEmptyString,
+  teamName: TrimmedNonEmptyString,
+  updatedAt: IsoDateTime,
+});
+export type ServerLinearProjectBinding = typeof ServerLinearProjectBinding.Type;
+
+export const ServerGetProjectLinearBindingInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ServerGetProjectLinearBindingInput = typeof ServerGetProjectLinearBindingInput.Type;
+
+export const ServerSetProjectLinearBindingInput = Schema.Struct({
+  projectId: ProjectId,
+  teamId: Schema.NullOr(TrimmedNonEmptyString),
+  teamKey: Schema.NullOr(TrimmedNonEmptyString),
+  teamName: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type ServerSetProjectLinearBindingInput = typeof ServerSetProjectLinearBindingInput.Type;
 
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,

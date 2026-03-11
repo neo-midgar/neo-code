@@ -5,6 +5,8 @@ import { runProcess } from "../../processRunner";
 import { GitHubCliError } from "../Errors.ts";
 import {
   GitHubCli,
+  type GitHubPullRequestCheck,
+  type GitHubPullRequestReviewFinding,
   type GitHubRepositoryCloneUrls,
   type GitHubCliShape,
   type GitHubPullRequestSummary,
@@ -109,6 +111,48 @@ const RawGitHubRepositoryCloneUrlsSchema = Schema.Struct({
   sshUrl: TrimmedNonEmptyString,
 });
 
+const GitHubPullRequestCheckBucket = Schema.Literals([
+  "pass",
+  "fail",
+  "pending",
+  "skipping",
+  "cancel",
+]);
+
+const RawGitHubPullRequestCheckSchema = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  state: Schema.String,
+  bucket: GitHubPullRequestCheckBucket,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  link: Schema.optional(Schema.NullOr(Schema.String)),
+  workflow: Schema.optional(Schema.NullOr(Schema.String)),
+  event: Schema.optional(Schema.NullOr(Schema.String)),
+  startedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  completedAt: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawGitHubPullRequestReviewDecisionSchema = Schema.Struct({
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawGitHubPullRequestReviewFindingSchema = Schema.Struct({
+  id: PositiveInt,
+  body: Schema.String,
+  path: TrimmedNonEmptyString,
+  line: Schema.optional(Schema.NullOr(PositiveInt)),
+  html_url: TrimmedNonEmptyString,
+  created_at: TrimmedNonEmptyString,
+  updated_at: TrimmedNonEmptyString,
+  in_reply_to_id: Schema.optional(Schema.NullOr(PositiveInt)),
+  user: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        login: TrimmedNonEmptyString,
+      }),
+    ),
+  ),
+});
+
 function normalizePullRequestSummary(
   raw: Schema.Schema.Type<typeof RawGitHubPullRequestSchema>,
 ): GitHubPullRequestSummary {
@@ -143,10 +187,61 @@ function normalizeRepositoryCloneUrls(
   };
 }
 
+function normalizePullRequestCheck(
+  raw: Schema.Schema.Type<typeof RawGitHubPullRequestCheckSchema>,
+): GitHubPullRequestCheck {
+  return {
+    name: raw.name,
+    state: raw.state,
+    bucket: raw.bucket,
+    description: raw.description ?? null,
+    link: raw.link ?? null,
+    workflow:
+      typeof raw.workflow === "string" && raw.workflow.trim().length > 0 ? raw.workflow : null,
+    event: typeof raw.event === "string" && raw.event.trim().length > 0 ? raw.event : null,
+    startedAt: raw.startedAt ?? null,
+    completedAt: raw.completedAt ?? null,
+  };
+}
+
+function normalizePullRequestReviewFinding(
+  raw: Schema.Schema.Type<typeof RawGitHubPullRequestReviewFindingSchema>,
+): GitHubPullRequestReviewFinding | null {
+  if (raw.in_reply_to_id !== undefined && raw.in_reply_to_id !== null) {
+    return null;
+  }
+  const authorLogin = raw.user?.login?.trim() ?? "";
+  if (authorLogin.length === 0) {
+    return null;
+  }
+  const body = raw.body.trim();
+  if (body.length === 0) {
+    return null;
+  }
+
+  return {
+    id: String(raw.id),
+    authorLogin,
+    authorName: null,
+    body,
+    path: raw.path,
+    line: raw.line ?? null,
+    url: raw.html_url,
+    createdAt: raw.created_at,
+    updatedAt: raw.updated_at,
+  };
+}
+
 function decodeGitHubJson<S extends Schema.Top>(
   raw: string,
   schema: S,
-  operation: "listOpenPullRequests" | "getPullRequest" | "getRepositoryCloneUrls",
+  operation:
+    | "listOpenPullRequests"
+    | "getPullRequest"
+    | "getRepositoryCloneUrls"
+    | "listPullRequestChecks"
+    | "getPullRequestReviewDecision"
+    | "listPullRequestReviewFindings",
   invalidDetail: string,
 ): Effect.Effect<S["Type"], GitHubCliError, S["DecodingServices"]> {
   return Schema.decodeEffect(Schema.fromJsonString(schema))(raw).pipe(
@@ -272,6 +367,77 @@ const makeGitHubCli = Effect.sync(() => {
         cwd: input.cwd,
         args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
       }).pipe(Effect.asVoid),
+    listPullRequestChecks: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "pr",
+          "checks",
+          input.reference,
+          "--json",
+          "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
+        ],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          raw.length === 0
+            ? Effect.succeed([])
+            : decodeGitHubJson(
+                raw,
+                Schema.Array(RawGitHubPullRequestCheckSchema),
+                "listPullRequestChecks",
+                "GitHub CLI returned invalid pull request checks JSON.",
+              ),
+        ),
+        Effect.map((checks) => checks.map(normalizePullRequestCheck)),
+      ),
+    getPullRequestReviewDecision: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: ["pr", "view", input.reference, "--json", "reviewDecision"],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          decodeGitHubJson(
+            raw,
+            RawGitHubPullRequestReviewDecisionSchema,
+            "getPullRequestReviewDecision",
+            "GitHub CLI returned invalid pull request review decision JSON.",
+          ),
+        ),
+        Effect.map((result) => {
+          const reviewDecision = result.reviewDecision?.trim() ?? "";
+          return reviewDecision.length > 0 ? reviewDecision : null;
+        }),
+      ),
+    listPullRequestReviewFindings: (input) =>
+      execute({
+        cwd: input.cwd,
+        args: [
+          "api",
+          `repos/${input.repository}/pulls/${input.number}/comments?per_page=${String(
+            input.limit ?? 100,
+          )}`,
+        ],
+      }).pipe(
+        Effect.map((result) => result.stdout.trim()),
+        Effect.flatMap((raw) =>
+          raw.length === 0
+            ? Effect.succeed([])
+            : decodeGitHubJson(
+                raw,
+                Schema.Array(RawGitHubPullRequestReviewFindingSchema),
+                "listPullRequestReviewFindings",
+                "GitHub CLI returned invalid pull request review comment JSON.",
+              ),
+        ),
+        Effect.map((findings) =>
+          findings
+            .map(normalizePullRequestReviewFinding)
+            .filter((finding): finding is GitHubPullRequestReviewFinding => finding !== null)
+            .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
+        ),
+      ),
   } satisfies GitHubCliShape;
 
   return service;

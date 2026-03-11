@@ -25,6 +25,9 @@ interface FakeGhScenario {
   prListByHeadSelector?: Record<string, string>;
   createdPrUrl?: string;
   defaultBranch?: string;
+  checksJson?: string;
+  reviewDecision?: string | null;
+  reviewFindingsJson?: string;
   pullRequest?: {
     number: number;
     title: string;
@@ -262,24 +265,40 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
         state: "open",
       };
       return Effect.succeed({
-        stdout:
-          JSON.stringify({
-            ...pullRequest,
-            ...(pullRequest.headRepositoryNameWithOwner
-              ? {
-                  headRepository: {
-                    nameWithOwner: pullRequest.headRepositoryNameWithOwner,
-                  },
-                }
-              : {}),
-            ...(pullRequest.headRepositoryOwnerLogin
-              ? {
-                  headRepositoryOwner: {
-                    login: pullRequest.headRepositoryOwnerLogin,
-                  },
-                }
-              : {}),
-          }) + "\n",
+        stdout: args.includes("reviewDecision")
+          ? { reviewDecision: scenario.reviewDecision ?? null }
+          : {
+              ...pullRequest,
+              ...(pullRequest.headRepositoryNameWithOwner
+                ? {
+                    headRepository: {
+                      nameWithOwner: pullRequest.headRepositoryNameWithOwner,
+                    },
+                  }
+                : {}),
+              ...(pullRequest.headRepositoryOwnerLogin
+                ? {
+                    headRepositoryOwner: {
+                      login: pullRequest.headRepositoryOwnerLogin,
+                    },
+                  }
+                : {}),
+            },
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      }).pipe(
+        Effect.map((result) => ({
+          ...result,
+          stdout: JSON.stringify(result.stdout) + "\n",
+        })),
+      );
+    }
+
+    if (args[0] === "pr" && args[1] === "checks") {
+      return Effect.succeed({
+        stdout: (scenario.checksJson ?? "[]") + "\n",
         stderr: "",
         code: 0,
         signal: null,
@@ -354,6 +373,16 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
       }
       return Effect.succeed({
         stdout: `${scenario.defaultBranch ?? "main"}\n`,
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+    }
+
+    if (args[0] === "api" && typeof args[1] === "string") {
+      return Effect.succeed({
+        stdout: (scenario.reviewFindingsJson ?? "[]") + "\n",
         stderr: "",
         code: 0,
         signal: null,
@@ -439,6 +468,32 @@ function createGitHubCliWithFakeGh(scenario: FakeGhScenario = {}): {
           cwd: input.cwd,
           args: ["pr", "checkout", input.reference, ...(input.force ? ["--force"] : [])],
         }).pipe(Effect.asVoid),
+      listPullRequestChecks: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "checks",
+            input.reference,
+            "--json",
+            "bucket,completedAt,description,event,link,name,startedAt,state,workflow",
+          ],
+        }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
+      getPullRequestReviewDecision: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: ["pr", "view", input.reference, "--json", "reviewDecision"],
+        }).pipe(
+          Effect.map((result) => {
+            const parsed = JSON.parse(result.stdout) as { reviewDecision?: string | null };
+            return parsed.reviewDecision ?? null;
+          }),
+        ),
+      listPullRequestReviewFindings: (input) =>
+        execute({
+          cwd: input.cwd,
+          args: ["api", `repos/${input.repository}/pulls/${input.number}/comments?per_page=100`],
+        }).pipe(Effect.map((result) => JSON.parse(result.stdout))),
     },
     ghCalls,
   };
@@ -462,7 +517,12 @@ function resolvePullRequest(manager: GitManagerShape, input: { cwd: string; refe
 
 function preparePullRequestThread(
   manager: GitManagerShape,
-  input: { cwd: string; reference: string; mode: "local" | "worktree" },
+  input: {
+    cwd: string;
+    reference: string;
+    mode: "local" | "worktree";
+    branchPrefix?: string;
+  },
 ) {
   return manager.preparePullRequestThread(input);
 }
@@ -1821,6 +1881,63 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           ])).stdout.trim(),
         ).toBe("fork-seed/main");
       }),
+  );
+
+  it.effect("uses a custom branch prefix when preparing a fork PR worktree", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const originDir = yield* createBareRemote();
+      const forkDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "fork-main-source"]);
+      fs.writeFileSync(path.join(repoDir, "fork-main-custom.txt"), "fork main custom\n");
+      yield* runGit(repoDir, ["add", "fork-main-custom.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Fork main custom branch"]);
+      yield* runGit(repoDir, ["push", "-u", "fork-seed", "fork-main-source:main"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          pullRequest: {
+            number: 93,
+            title: "Fork main custom prefix PR",
+            url: "https://github.com/pingdotgg/codething-mvp/pull/93",
+            baseRefName: "main",
+            headRefName: "main",
+            state: "open",
+            isCrossRepository: true,
+            headRepositoryNameWithOwner: "octocat/codething-mvp",
+            headRepositoryOwnerLogin: "octocat",
+          },
+          repositoryCloneUrls: {
+            "octocat/codething-mvp": {
+              url: forkDir,
+              sshUrl: forkDir,
+            },
+          },
+        },
+      });
+
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "93",
+        mode: "worktree",
+        branchPrefix: "review/team",
+      });
+
+      expect(result.branch).toBe("review/team/pr-93/main");
+      expect(result.worktreePath).not.toBeNull();
+      expect(
+        (yield* runGit(result.worktreePath as string, [
+          "rev-parse",
+          "--abbrev-ref",
+          "@{upstream}",
+        ])).stdout.trim(),
+      ).toBe("fork-seed/main");
+    }),
   );
 
   it.effect("reuses an existing PR worktree and restores fork upstream tracking", () =>

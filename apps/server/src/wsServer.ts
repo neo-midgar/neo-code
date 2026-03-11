@@ -67,17 +67,16 @@ import {
   resolveAttachmentRelativePath,
 } from "./attachmentPaths";
 
-import {
-  createAttachmentId,
-  resolveAttachmentPath,
-  resolveAttachmentPathById,
-} from "./attachmentStore.ts";
+import { resolveAttachmentPathById } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
+import { persistImageAttachmentBytes } from "./chatAttachments.ts";
+import { LinearService } from "./integrations/linear/Services/LinearService.ts";
+import { ServerSettings } from "./serverSettings.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -214,6 +213,8 @@ export type ServerRuntimeServices =
   | ServerCoreRuntimeServices
   | GitManager
   | GitCore
+  | LinearService
+  | ServerSettings
   | TerminalManager
   | Keybindings
   | Open
@@ -354,49 +355,24 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             });
           }
 
-          const attachmentId = createAttachmentId(turnStartCommand.threadId);
-          if (!attachmentId) {
-            return yield* new RouteRequestError({
-              message: "Failed to create a safe attachment id.",
-            });
-          }
-
-          const persistedAttachment = {
-            type: "image" as const,
-            id: attachmentId,
+          return yield* persistImageAttachmentBytes({
+            threadId: turnStartCommand.threadId,
             name: attachment.name,
-            mimeType: parsed.mimeType.toLowerCase(),
-            sizeBytes: bytes.byteLength,
-          };
-
-          const attachmentPath = resolveAttachmentPath({
+            mimeType: parsed.mimeType,
+            bytes,
             stateDir: serverConfig.stateDir,
-            attachment: persistedAttachment,
-          });
-          if (!attachmentPath) {
-            return yield* new RouteRequestError({
-              message: `Failed to resolve persisted path for '${attachment.name}'.`,
-            });
-          }
-
-          yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
+            fileSystem,
+          }).pipe(
             Effect.mapError(
-              () =>
+              (cause) =>
                 new RouteRequestError({
-                  message: `Failed to create attachment directory for '${attachment.name}'.`,
+                  message:
+                    cause instanceof Error
+                      ? cause.message
+                      : `Failed to persist attachment '${attachment.name}'.`,
                 }),
             ),
           );
-          yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
-            Effect.mapError(
-              () =>
-                new RouteRequestError({
-                  message: `Failed to persist attachment '${attachment.name}'.`,
-                }),
-            ),
-          );
-
-          return persistedAttachment;
         }),
       { concurrency: 1 },
     );
@@ -603,6 +579,8 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const checkpointDiffQuery = yield* CheckpointDiffQuery;
   const orchestrationReactor = yield* OrchestrationReactor;
   const { openInEditor } = yield* Open;
+  const linearService = yield* LinearService;
+  const serverSettings = yield* ServerSettings;
 
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
@@ -806,6 +784,34 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* gitManager.preparePullRequestThread(body);
       }
 
+      case WS_METHODS.gitObservePullRequest: {
+        const body = stripRequestTag(request.body);
+        return yield* gitManager.observePullRequest(body);
+      }
+
+      case WS_METHODS.linearGetIssue: {
+        const body = stripRequestTag(request.body);
+        return yield* linearService.getIssue(body);
+      }
+
+      case WS_METHODS.linearListTeams:
+        return yield* linearService.listTeams();
+
+      case WS_METHODS.linearListProjectIssues: {
+        const body = stripRequestTag(request.body);
+        return yield* linearService.listProjectIssues(body);
+      }
+
+      case WS_METHODS.linearImportIssue: {
+        const body = stripRequestTag(request.body);
+        return yield* linearService.importIssue(body);
+      }
+
+      case WS_METHODS.linearReportThread: {
+        const body = stripRequestTag(request.body);
+        return yield* linearService.reportThread(body);
+      }
+
       case WS_METHODS.gitListBranches: {
         const body = stripRequestTag(request.body);
         return yield* git.listBranches(body);
@@ -876,6 +882,24 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           providers: providerStatuses,
           availableEditors,
         };
+
+      case WS_METHODS.serverGetLinearConfig:
+        return yield* serverSettings.getLinearCredentialSummary();
+
+      case WS_METHODS.serverGetProjectLinearBinding: {
+        const body = stripRequestTag(request.body);
+        return yield* serverSettings.getLinearProjectBinding(body.projectId);
+      }
+
+      case WS_METHODS.serverSetLinearApiKey: {
+        const body = stripRequestTag(request.body);
+        return yield* serverSettings.setLinearApiKey(body.apiKey);
+      }
+
+      case WS_METHODS.serverSetProjectLinearBinding: {
+        const body = stripRequestTag(request.body);
+        return yield* serverSettings.setLinearProjectBinding(body);
+      }
 
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);

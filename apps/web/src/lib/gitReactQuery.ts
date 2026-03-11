@@ -11,6 +11,8 @@ export const gitQueryKeys = {
   all: ["git"] as const,
   status: (cwd: string | null) => ["git", "status", cwd] as const,
   branches: (cwd: string | null) => ["git", "branches", cwd] as const,
+  pullRequestObservation: (cwd: string | null, reference: string | null) =>
+    ["git", "pull-request-observation", cwd, reference] as const,
 };
 
 export const gitMutationKeys = {
@@ -75,6 +77,30 @@ export function gitResolvePullRequestQueryOptions(input: {
     staleTime: 30_000,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
+  });
+}
+
+export function gitObservePullRequestQueryOptions(input: {
+  cwd: string | null;
+  reference?: string | null;
+}) {
+  return queryOptions({
+    queryKey: gitQueryKeys.pullRequestObservation(input.cwd, input.reference ?? null),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.cwd) {
+        throw new Error("Pull request observation is unavailable.");
+      }
+      return api.git.observePullRequest({
+        cwd: input.cwd,
+        ...(input.reference ? { reference: input.reference } : {}),
+      });
+    },
+    enabled: input.cwd !== null,
+    staleTime: 5_000,
+    refetchOnWindowFocus: "always",
+    refetchOnReconnect: "always",
+    refetchInterval: 15_000,
   });
 }
 
@@ -196,13 +222,22 @@ export function gitPreparePullRequestThreadMutationOptions(input: {
   queryClient: QueryClient;
 }) {
   return mutationOptions({
-    mutationFn: async ({ reference, mode }: { reference: string; mode: "local" | "worktree" }) => {
+    mutationFn: async ({
+      reference,
+      mode,
+      branchPrefix,
+    }: {
+      reference: string;
+      mode: "local" | "worktree";
+      branchPrefix?: string;
+    }) => {
       const api = ensureNativeApi();
       if (!input.cwd) throw new Error("Pull request thread preparation is unavailable.");
       return api.git.preparePullRequestThread({
         cwd: input.cwd,
         reference,
         mode,
+        ...(branchPrefix ? { branchPrefix } : {}),
       });
     },
     mutationKey: gitMutationKeys.preparePullRequestThread(input.cwd),

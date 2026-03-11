@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
+import { GitObservePullRequestResult } from "@t3tools/contracts";
 import {
+  buildPullRequestWorktreeBranchName,
   resolveAutoFeatureBranchName,
-  sanitizeBranchFragment,
   sanitizeFeatureBranchName,
 } from "@t3tools/shared/git";
 
@@ -60,6 +61,13 @@ function parseRepositoryNameFromPullRequestUrl(url: string): string | null {
   return repositoryName.length > 0 ? repositoryName : null;
 }
 
+function parseRepositoryNameWithOwnerFromPullRequestUrl(url: string): string | null {
+  const trimmed = url.trim();
+  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+)\/pull\/\d+(?:\/.*)?$/i.exec(trimmed);
+  const repositoryNameWithOwner = match?.[1]?.trim() ?? "";
+  return repositoryNameWithOwner.length > 0 ? repositoryNameWithOwner : null;
+}
+
 function resolveHeadRepositoryNameWithOwner(
   pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
 ): string | null {
@@ -83,14 +91,17 @@ function resolveHeadRepositoryNameWithOwner(
 
 function resolvePullRequestWorktreeLocalBranchName(
   pullRequest: ResolvedPullRequest & PullRequestHeadRemoteInfo,
+  branchPrefix?: string | null,
 ): string {
   if (!pullRequest.isCrossRepository) {
     return pullRequest.headBranch;
   }
 
-  const sanitizedHeadBranch = sanitizeBranchFragment(pullRequest.headBranch).trim();
-  const suffix = sanitizedHeadBranch.length > 0 ? sanitizedHeadBranch : "head";
-  return `t3code/pr-${pullRequest.number}/${suffix}`;
+  return buildPullRequestWorktreeBranchName({
+    prefix: branchPrefix,
+    pullRequestNumber: pullRequest.number,
+    headBranch: pullRequest.headBranch,
+  });
 }
 
 function parseGitHubRepositoryNameWithOwnerFromRemoteUrl(url: string | null): string | null {
@@ -823,6 +834,71 @@ export const makeGitManager = Effect.gen(function* () {
     },
   );
 
+  const observePullRequest: GitManagerShape["observePullRequest"] = (input) =>
+    Effect.gen(function* () {
+      const pullRequestSummary = input.reference
+        ? yield* gitHubCli.getPullRequest({
+            cwd: input.cwd,
+            reference: normalizePullRequestReference(input.reference),
+          })
+        : yield* Effect.gen(function* () {
+            const branches = yield* gitCore.listBranches({ cwd: input.cwd });
+            const currentBranch = branches.branches.find((branch) => branch.current)?.name ?? null;
+            if (!currentBranch) {
+              return yield* gitManagerError(
+                "observePullRequest",
+                "Could not determine the current branch for this repository.",
+              );
+            }
+
+            const pullRequests = yield* gitHubCli.listOpenPullRequests({
+              cwd: input.cwd,
+              headSelector: currentBranch,
+              limit: 1,
+            });
+            const firstPullRequest = pullRequests[0];
+            if (!firstPullRequest) {
+              return yield* gitManagerError(
+                "observePullRequest",
+                `No open pull request is associated with branch '${currentBranch}'.`,
+              );
+            }
+            return firstPullRequest;
+          });
+
+      const repository = parseRepositoryNameWithOwnerFromPullRequestUrl(pullRequestSummary.url);
+      if (!repository) {
+        return yield* gitManagerError(
+          "observePullRequest",
+          "Could not determine the GitHub repository for this pull request.",
+        );
+      }
+
+      const [checks, reviewDecision, findings] = yield* Effect.all([
+        gitHubCli.listPullRequestChecks({
+          cwd: input.cwd,
+          reference: pullRequestSummary.url,
+        }),
+        gitHubCli.getPullRequestReviewDecision({
+          cwd: input.cwd,
+          reference: pullRequestSummary.url,
+        }),
+        gitHubCli.listPullRequestReviewFindings({
+          cwd: input.cwd,
+          repository,
+          number: pullRequestSummary.number,
+          limit: 100,
+        }),
+      ]);
+
+      return {
+        pullRequest: toResolvedPullRequest(pullRequestSummary),
+        reviewDecision,
+        checks,
+        findings,
+      } satisfies GitObservePullRequestResult;
+    });
+
   const preparePullRequestThread: GitManagerShape["preparePullRequestThread"] = Effect.fnUntraced(
     function* (input) {
       const normalizedReference = normalizePullRequestReference(input.reference);
@@ -872,8 +948,10 @@ export const makeGitManager = Effect.gen(function* () {
         ...pullRequest,
         ...toPullRequestHeadRemoteInfo(pullRequestSummary),
       } as const;
-      const localPullRequestBranch =
-        resolvePullRequestWorktreeLocalBranchName(pullRequestWithRemoteInfo);
+      const localPullRequestBranch = resolvePullRequestWorktreeLocalBranchName(
+        pullRequestWithRemoteInfo,
+        input.branchPrefix,
+      );
 
       const findLocalHeadBranch = (cwd: string) =>
         gitCore.listBranches({ cwd }).pipe(
@@ -1057,6 +1135,7 @@ export const makeGitManager = Effect.gen(function* () {
     status,
     resolvePullRequest,
     preparePullRequestThread,
+    observePullRequest,
     runStackedAction,
   } satisfies GitManagerShape;
 });

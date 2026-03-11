@@ -1,9 +1,13 @@
 import { queryOptions } from "@tanstack/react-query";
+import { ProjectId } from "@t3tools/contracts";
 import { ensureNativeApi } from "~/nativeApi";
 
 export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
+  linearConfig: () => ["server", "linear-config"] as const,
+  projectLinearBinding: (projectId: string | null) =>
+    ["server", "project-linear-binding", projectId] as const,
 };
 
 export function serverConfigQueryOptions() {
@@ -14,5 +18,31 @@ export function serverConfigQueryOptions() {
       return api.server.getConfig();
     },
     staleTime: Infinity,
+  });
+}
+
+export function serverLinearConfigQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.linearConfig(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getLinearConfig();
+    },
+    staleTime: Infinity,
+  });
+}
+
+export function serverProjectLinearBindingQueryOptions(projectId: string | null) {
+  return queryOptions({
+    queryKey: serverQueryKeys.projectLinearBinding(projectId),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!projectId) {
+        throw new Error("Project Linear binding lookup is unavailable.");
+      }
+      return api.server.getProjectLinearBinding({ projectId: ProjectId.makeUnsafe(projectId) });
+    },
+    enabled: projectId !== null,
+    staleTime: 30_000,
   });
 }

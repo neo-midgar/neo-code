@@ -145,6 +145,14 @@ export function createWsNativeApi(): NativeApi {
       resolvePullRequest: (input) => transport.request(WS_METHODS.gitResolvePullRequest, input),
       preparePullRequestThread: (input) =>
         transport.request(WS_METHODS.gitPreparePullRequestThread, input),
+      observePullRequest: (input) => transport.request(WS_METHODS.gitObservePullRequest, input),
+    },
+    linear: {
+      getIssue: (input) => transport.request(WS_METHODS.linearGetIssue, input),
+      listTeams: () => transport.request(WS_METHODS.linearListTeams),
+      listProjectIssues: (input) => transport.request(WS_METHODS.linearListProjectIssues, input),
+      importIssue: (input) => transport.request(WS_METHODS.linearImportIssue, input),
+      reportThread: (input) => transport.request(WS_METHODS.linearReportThread, input),
     },
     contextMenu: {
       show: async <T extends string>(
@@ -159,6 +167,12 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
+      getLinearConfig: () => transport.request(WS_METHODS.serverGetLinearConfig),
+      getProjectLinearBinding: (input) =>
+        transport.request(WS_METHODS.serverGetProjectLinearBinding, input),
+      setLinearApiKey: (input) => transport.request(WS_METHODS.serverSetLinearApiKey, input),
+      setProjectLinearBinding: (input) =>
+        transport.request(WS_METHODS.serverSetProjectLinearBinding, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
     orchestration: {

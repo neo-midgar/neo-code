@@ -18,6 +18,9 @@ import {
   type ProviderKind,
   type ThreadId,
   type TurnId,
+  type LinearIssue,
+  type GitObservePullRequestResult,
+  type GitPullRequestReviewFinding,
   OrchestrationThreadActivity,
   RuntimeMode,
   ProviderInteractionMode,
@@ -29,6 +32,7 @@ import {
   normalizeModelSlug,
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
+import { extractLinkedLinearIssueFromActivities, toLinearAppUrl } from "@t3tools/shared/linear";
 import {
   memo,
   useCallback,
@@ -130,6 +134,7 @@ import PlanSidebar from "./PlanSidebar";
 import ThreadTerminalDrawer from "./ThreadTerminalDrawer";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
 import {
+  BugIcon,
   BotIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
@@ -139,6 +144,7 @@ import {
   FolderIcon,
   DiffIcon,
   EllipsisIcon,
+  ExternalLinkIcon,
   FolderClosedIcon,
   ListTodoIcon,
   LockIcon,
@@ -216,7 +222,9 @@ import { shouldUseCompactComposerFooter } from "./composerFooterLayout";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { clamp } from "effect/Number";
 import { ComposerPromptEditor, type ComposerPromptEditorHandle } from "./ComposerPromptEditor";
+import { LinearReportDialog } from "./LinearReportDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
+import { PullRequestObserverCard } from "./PullRequestObserverCard";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
 
 function formatMessageMeta(createdAt: string, duration: string | null): string {
@@ -660,6 +668,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const [composerHighlightedItemId, setComposerHighlightedItemId] = useState<string | null>(null);
   const [pullRequestDialogState, setPullRequestDialogState] =
     useState<PullRequestDialogState | null>(null);
+  const [linearReportDialogOpen, setLinearReportDialogOpen] = useState(false);
   const [attachmentPreviewHandoffByMessageId, setAttachmentPreviewHandoffByMessageId] = useState<
     Record<string, string[]>
   >({});
@@ -956,6 +965,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
     sendStartedAt,
   );
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const linkedLinearIssue = useMemo(
+    () => extractLinkedLinearIssueFromActivities(threadActivities),
+    [threadActivities],
+  );
   const workLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
@@ -1005,6 +1018,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
+  useEffect(() => {
+    setLinearReportDialogOpen(false);
+  }, [activeThreadId]);
   const activeProposedPlan = useMemo(() => {
     if (!latestTurnSettled) {
       return null;
@@ -2981,13 +2997,17 @@ export default function ChatView({ threadId }: ChatViewProps) {
     setActivePendingUserInputQuestionIndex(Math.max(activePendingProgress.questionIndex - 1, 0));
   }, [activePendingProgress, setActivePendingUserInputQuestionIndex]);
 
-  const onSubmitPlanFollowUp = useCallback(
+  const startTextOnlyTurn = useCallback(
     async ({
       text,
-      interactionMode: nextInteractionMode,
+      nextInteractionMode,
+      errorPrefix,
+      syncDraftInteractionMode = false,
     }: {
       text: string;
-      interactionMode: "default" | "plan";
+      nextInteractionMode: "default" | "plan";
+      errorPrefix: string;
+      syncDraftInteractionMode?: boolean;
     }) => {
       const api = readNativeApi();
       if (
@@ -2998,12 +3018,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
         isConnecting ||
         sendInFlightRef.current
       ) {
-        return;
+        return false;
       }
 
       const trimmed = text.trim();
       if (!trimmed) {
-        return;
+        return false;
       }
 
       const threadIdForSend = activeThread.id;
@@ -3035,9 +3055,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
           interactionMode: nextInteractionMode,
         });
 
-        // Keep the mode toggle and plan-follow-up banner in sync immediately
-        // while the same-thread implementation turn is starting.
-        setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
+        if (syncDraftInteractionMode) {
+          setComposerDraftInteractionMode(threadIdForSend, nextInteractionMode);
+        }
 
         await api.orchestration.dispatchCommand({
           type: "thread.turn.start",
@@ -3060,24 +3080,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
           interactionMode: nextInteractionMode,
           createdAt: messageCreatedAt,
         });
-        // Optimistically open the plan sidebar when implementing (not refining).
-        // "default" mode here means the agent is executing the plan, which produces
-        // step-tracking activities that the sidebar will display.
-        if (nextInteractionMode === "default") {
-          planSidebarDismissedForTurnRef.current = null;
-          setPlanSidebarOpen(true);
-        }
         sendInFlightRef.current = false;
+        return true;
       } catch (err) {
         setOptimisticUserMessages((existing) =>
           existing.filter((message) => message.id !== messageIdForSend),
         );
-        setThreadError(
-          threadIdForSend,
-          err instanceof Error ? err.message : "Failed to send plan follow-up.",
-        );
+        setThreadError(threadIdForSend, err instanceof Error ? err.message : `${errorPrefix}.`);
         sendInFlightRef.current = false;
         resetSendPhase();
+        return false;
       }
     },
     [
@@ -3088,16 +3100,67 @@ export default function ChatView({ threadId }: ChatViewProps) {
       isSendBusy,
       isServerThread,
       persistThreadSettingsForNextTurn,
+      providerOptionsForDispatch,
       resetSendPhase,
       runtimeMode,
       selectedModel,
       selectedModelOptionsForDispatch,
-      providerOptionsForDispatch,
       selectedProvider,
       setComposerDraftInteractionMode,
       setThreadError,
       settings.enableAssistantStreaming,
     ],
+  );
+
+  const onSubmitPlanFollowUp = useCallback(
+    async ({
+      text,
+      interactionMode: nextInteractionMode,
+    }: {
+      text: string;
+      interactionMode: "default" | "plan";
+    }) => {
+      const started = await startTextOnlyTurn({
+        text,
+        nextInteractionMode,
+        errorPrefix: "Failed to send plan follow-up",
+        syncDraftInteractionMode: true,
+      });
+      if (started && nextInteractionMode === "default") {
+        // Optimistically open the plan sidebar when implementing (not refining).
+        // "default" mode here means the agent is executing the plan, which produces
+        // step-tracking activities that the sidebar will display.
+        planSidebarDismissedForTurnRef.current = null;
+        setPlanSidebarOpen(true);
+      }
+    },
+    [startTextOnlyTurn],
+  );
+
+  const onFixPullRequestFinding = useCallback(
+    async (input: {
+      finding: GitPullRequestReviewFinding;
+      observation: GitObservePullRequestResult;
+    }) => {
+      const location = input.finding.line
+        ? `${input.finding.path}:${input.finding.line}`
+        : input.finding.path;
+      const prompt = [
+        `Address this pull request review finding on PR #${input.observation.pullRequest.number}: ${input.observation.pullRequest.title}`,
+        `Reviewer: ${input.finding.authorLogin}`,
+        `Location: ${location}`,
+        `Comment:\n${input.finding.body}`,
+        "Task:",
+        "Inspect the current branch/worktree, implement the fix if the feedback is valid, and summarize the change clearly.",
+        "If you disagree with the finding, explain why before making any code changes.",
+      ].join("\n\n");
+      await startTextOnlyTurn({
+        text: prompt,
+        nextInteractionMode: "default",
+        errorPrefix: "Failed to start pull request fix turn",
+      });
+    },
+    [startTextOnlyTurn],
   );
 
   const onImplementPlanInNewThread = useCallback(async () => {
@@ -3565,6 +3628,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
           diffToggleShortcutLabel={diffPanelShortcutLabel}
           gitCwd={gitCwd}
           diffOpen={diffOpen}
+          linkedLinearIssue={linkedLinearIssue}
+          onOpenLinkedLinearIssue={(url) => {
+            const api = readNativeApi();
+            if (!api) {
+              return;
+            }
+            void api.shell.openExternal(toLinearAppUrl(url) ?? url);
+          }}
+          onReportToLinear={() => setLinearReportDialogOpen(true)}
           onRunProjectScript={(script) => {
             void runProjectScript(script);
           }}
@@ -3574,6 +3646,33 @@ export default function ChatView({ threadId }: ChatViewProps) {
           onToggleDiff={onToggleDiff}
         />
       </header>
+      <LinearReportDialog
+        open={linearReportDialogOpen}
+        threadId={activeThreadId}
+        linkedIssue={linkedLinearIssue}
+        onOpenChange={setLinearReportDialogOpen}
+        onReported={({ commentUrl }) => {
+          if (!commentUrl) {
+            return;
+          }
+          const api = readNativeApi();
+          if (!api) {
+            return;
+          }
+          void api.shell.openExternal(toLinearAppUrl(commentUrl) ?? commentUrl);
+        }}
+      />
+      <PullRequestObserverCard
+        gitCwd={gitCwd}
+        onOpenUrl={(url) => {
+          const api = readNativeApi();
+          if (!api) {
+            return;
+          }
+          void api.shell.openExternal(url);
+        }}
+        onFixFinding={onFixPullRequestFinding}
+      />
 
       {/* Error banner */}
       <ProviderHealthBanner status={activeProviderStatus} />
@@ -4266,6 +4365,9 @@ interface ChatHeaderProps {
   diffToggleShortcutLabel: string | null;
   gitCwd: string | null;
   diffOpen: boolean;
+  linkedLinearIssue: LinearIssue | null;
+  onOpenLinkedLinearIssue: (url: string) => void;
+  onReportToLinear: () => void;
   onRunProjectScript: (script: ProjectScript) => void;
   onAddProjectScript: (input: NewProjectScriptInput) => Promise<void>;
   onUpdateProjectScript: (scriptId: string, input: NewProjectScriptInput) => Promise<void>;
@@ -4286,6 +4388,9 @@ const ChatHeader = memo(function ChatHeader({
   diffToggleShortcutLabel,
   gitCwd,
   diffOpen,
+  linkedLinearIssue,
+  onOpenLinkedLinearIssue,
+  onReportToLinear,
   onRunProjectScript,
   onAddProjectScript,
   onUpdateProjectScript,
@@ -4331,6 +4436,30 @@ const ChatHeader = memo(function ChatHeader({
             availableEditors={availableEditors}
             openInCwd={openInCwd}
           />
+        )}
+        {linkedLinearIssue && (
+          <>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="shrink-0 gap-1.5"
+              onClick={() => onOpenLinkedLinearIssue(linkedLinearIssue.url)}
+            >
+              <BugIcon className="size-3" />
+              <span className="max-w-32 truncate">{linkedLinearIssue.identifier}</span>
+              <ExternalLinkIcon className="size-3 opacity-70" />
+            </Button>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="shrink-0"
+              onClick={onReportToLinear}
+            >
+              Report to Linear
+            </Button>
+          </>
         )}
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
         <Tooltip>

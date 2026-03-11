@@ -23,6 +23,30 @@ export interface GitHubPullRequestSummary {
   readonly headRepositoryOwnerLogin?: string | null;
 }
 
+export interface GitHubPullRequestCheck {
+  readonly name: string;
+  readonly state: string;
+  readonly bucket: "pass" | "fail" | "pending" | "skipping" | "cancel";
+  readonly description: string | null;
+  readonly link: string | null;
+  readonly workflow: string | null;
+  readonly event: string | null;
+  readonly startedAt: string | null;
+  readonly completedAt: string | null;
+}
+
+export interface GitHubPullRequestReviewFinding {
+  readonly id: string;
+  readonly authorLogin: string;
+  readonly authorName: string | null;
+  readonly body: string;
+  readonly path: string;
+  readonly line: number | null;
+  readonly url: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface GitHubRepositoryCloneUrls {
   readonly nameWithOwner: string;
   readonly url: string;
@@ -93,6 +117,32 @@ export interface GitHubCliShape {
     readonly reference: string;
     readonly force?: boolean;
   }) => Effect.Effect<void, GitHubCliError>;
+
+  /**
+   * List current status checks for a pull request.
+   */
+  readonly listPullRequestChecks: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<ReadonlyArray<GitHubPullRequestCheck>, GitHubCliError>;
+
+  /**
+   * Resolve the aggregate review decision for a pull request.
+   */
+  readonly getPullRequestReviewDecision: (input: {
+    readonly cwd: string;
+    readonly reference: string;
+  }) => Effect.Effect<string | null, GitHubCliError>;
+
+  /**
+   * List code review findings left on a pull request.
+   */
+  readonly listPullRequestReviewFindings: (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly limit?: number;
+  }) => Effect.Effect<ReadonlyArray<GitHubPullRequestReviewFinding>, GitHubCliError>;
 }
 
 /**

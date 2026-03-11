@@ -3,6 +3,8 @@ import type {
   GitCreateBranchInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
+  GitObservePullRequestInput,
+  GitObservePullRequestResult,
   GitPullRequestRefInput,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
@@ -19,12 +21,30 @@ import type {
   GitStatusResult,
 } from "./git";
 import type {
+  LinearGetIssueInput,
+  LinearGetIssueResult,
+  LinearImportIssueInput,
+  LinearImportIssueResult,
+  LinearListProjectIssuesInput,
+  LinearListProjectIssuesResult,
+  LinearListTeamsResult,
+  LinearReportThreadInput,
+  LinearReportThreadResult,
+} from "./linear";
+import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
 import type { ServerConfig } from "./server";
+import type {
+  ServerGetProjectLinearBindingInput,
+  ServerLinearConfig,
+  ServerLinearProjectBinding,
+  ServerSetLinearApiKeyInput,
+  ServerSetProjectLinearBindingInput,
+} from "./server";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -145,10 +165,20 @@ export interface NativeApi {
     preparePullRequestThread: (
       input: GitPreparePullRequestThreadInput,
     ) => Promise<GitPreparePullRequestThreadResult>;
+    observePullRequest: (input: GitObservePullRequestInput) => Promise<GitObservePullRequestResult>;
     // Stacked action API
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
+  };
+  linear: {
+    getIssue: (input: LinearGetIssueInput) => Promise<LinearGetIssueResult>;
+    listTeams: () => Promise<LinearListTeamsResult>;
+    listProjectIssues: (
+      input: LinearListProjectIssuesInput,
+    ) => Promise<LinearListProjectIssuesResult>;
+    importIssue: (input: LinearImportIssueInput) => Promise<LinearImportIssueResult>;
+    reportThread: (input: LinearReportThreadInput) => Promise<LinearReportThreadResult>;
   };
   contextMenu: {
     show: <T extends string>(
@@ -158,6 +188,14 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    getLinearConfig: () => Promise<ServerLinearConfig>;
+    getProjectLinearBinding: (
+      input: ServerGetProjectLinearBindingInput,
+    ) => Promise<ServerLinearProjectBinding | null>;
+    setLinearApiKey: (input: ServerSetLinearApiKeyInput) => Promise<ServerLinearConfig>;
+    setProjectLinearBinding: (
+      input: ServerSetProjectLinearBindingInput,
+    ) => Promise<ServerLinearProjectBinding | null>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
   };
   orchestration: {
