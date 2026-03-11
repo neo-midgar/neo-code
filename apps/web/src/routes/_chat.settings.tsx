@@ -92,8 +92,10 @@ function SettingsRouteView() {
   const serverLinearConfigQuery = useQuery(serverLinearConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
-  const [linearApiKeyInput, setLinearApiKeyInput] = useState("");
-  const [linearApiKeyMessage, setLinearApiKeyMessage] = useState<string | null>(null);
+  const [editingLinearCredentialId, setEditingLinearCredentialId] = useState<string | null>(null);
+  const [linearCredentialNameInput, setLinearCredentialNameInput] = useState("");
+  const [linearCredentialApiKeyInput, setLinearCredentialApiKeyInput] = useState("");
+  const [linearCredentialMessage, setLinearCredentialMessage] = useState<string | null>(null);
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
@@ -107,25 +109,53 @@ function SettingsRouteView() {
   const codexHomePath = settings.codexHomePath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const linearConfig = serverLinearConfigQuery.data ?? null;
-  const saveLinearApiKeyMutation = useMutation({
-    mutationFn: async (apiKey: string | null) => {
+  const saveLinearCredentialMutation = useMutation({
+    mutationFn: async (input: { credentialId?: string | null; name: string; apiKey: string }) => {
       const api = ensureNativeApi();
-      return api.server.setLinearApiKey({ apiKey });
+      return api.server.upsertLinearCredential(input);
     },
-    onSuccess: async (result) => {
-      await queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearConfig() });
-      setLinearApiKeyInput("");
-      setLinearApiKeyMessage(
-        result.source === "env"
-          ? "Environment variable still takes precedence. The saved key was updated as fallback."
-          : result.configured
-            ? "Saved Linear API key on the server."
-            : "Cleared the saved Linear API key.",
+    onSuccess: async (_result, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearConfig() }),
+        queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearProjectBindings() }),
+        queryClient.invalidateQueries({ queryKey: ["linear"] }),
+      ]);
+      setEditingLinearCredentialId(null);
+      setLinearCredentialNameInput("");
+      setLinearCredentialApiKeyInput("");
+      setLinearCredentialMessage(
+        variables.credentialId
+          ? `Updated Linear credential "${variables.name}".`
+          : `Saved Linear credential "${variables.name}".`,
       );
     },
     onError: (error) => {
-      setLinearApiKeyMessage(
-        error instanceof Error ? error.message : "Failed to update the Linear API key.",
+      setLinearCredentialMessage(
+        error instanceof Error ? error.message : "Failed to save the Linear credential.",
+      );
+    },
+  });
+  const deleteLinearCredentialMutation = useMutation({
+    mutationFn: async (credentialId: string) => {
+      const api = ensureNativeApi();
+      return api.server.deleteLinearCredential({ credentialId });
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearConfig() }),
+        queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearProjectBindings() }),
+        queryClient.invalidateQueries({ queryKey: ["linear"] }),
+      ]);
+      setEditingLinearCredentialId(null);
+      setLinearCredentialNameInput("");
+      setLinearCredentialApiKeyInput("");
+      setLinearCredentialMessage(
+        "Removed the Linear credential and cleared any project bindings using it.",
+      );
+    },
+    onError: (error) => {
+      setLinearCredentialMessage(
+        error instanceof Error ? error.message : "Failed to delete the Linear credential.",
       );
     },
   });
@@ -339,8 +369,8 @@ function SettingsRouteView() {
               <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Linear Integration</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Save a Linear API key on the server so issue import and report-back work without
-                  setting shell environment variables.
+                  Save multiple named Linear credentials on the server and bind each project to the
+                  right workspace/team.
                 </p>
               </div>
 
@@ -350,65 +380,146 @@ function SettingsRouteView() {
                   <span className="font-medium text-foreground">
                     {linearConfig
                       ? linearConfig.configured
-                        ? `Configured via ${linearConfig.source === "env" ? "environment" : "server settings"}`
+                        ? `${linearConfig.credentials.length} credential${linearConfig.credentials.length === 1 ? "" : "s"} available`
                         : "Not configured"
                       : "Loading..."}
                   </span>
                 </div>
 
-                <label htmlFor="linear-api-key" className="block space-y-1">
-                  <span className="text-xs font-medium text-foreground">Linear API key</span>
-                  <Input
-                    id="linear-api-key"
-                    type="password"
-                    autoComplete="off"
-                    value={linearApiKeyInput}
-                    onChange={(event) => {
-                      setLinearApiKeyInput(event.target.value);
-                      setLinearApiKeyMessage(null);
-                    }}
-                    placeholder={
-                      linearConfig?.configured
-                        ? "Enter a new key to replace the saved one"
-                        : "lin_api_..."
-                    }
-                  />
-                  <p className="text-xs text-muted-foreground">
+                <div className="grid gap-3 rounded-xl border border-border/70 bg-background p-4 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+                  <label htmlFor="linear-credential-name" className="block space-y-1">
+                    <span className="text-xs font-medium text-foreground">Credential label</span>
+                    <Input
+                      id="linear-credential-name"
+                      value={linearCredentialNameInput}
+                      onChange={(event) => {
+                        setLinearCredentialNameInput(event.target.value);
+                        setLinearCredentialMessage(null);
+                      }}
+                      placeholder="Personal workspace"
+                    />
+                  </label>
+                  <label htmlFor="linear-api-key" className="block space-y-1">
+                    <span className="text-xs font-medium text-foreground">Linear API key</span>
+                    <Input
+                      id="linear-api-key"
+                      type="password"
+                      autoComplete="off"
+                      value={linearCredentialApiKeyInput}
+                      onChange={(event) => {
+                        setLinearCredentialApiKeyInput(event.target.value);
+                        setLinearCredentialMessage(null);
+                      }}
+                      placeholder="lin_api_..."
+                    />
+                  </label>
+                  <p className="text-xs text-muted-foreground md:col-span-2">
                     Stored on the server in your local app state directory, not in browser
-                    `localStorage`.
+                    `localStorage`. Environment credentials stay read-only and appear below when
+                    `LINEAR_API_KEY` is set.
                   </p>
-                </label>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    onClick={() => {
-                      void saveLinearApiKeyMutation.mutateAsync(
-                        linearApiKeyInput.trim().length > 0 ? linearApiKeyInput : null,
-                      );
-                    }}
-                    disabled={
-                      saveLinearApiKeyMutation.isPending || linearApiKeyInput.trim().length === 0
-                    }
-                  >
-                    {saveLinearApiKeyMutation.isPending ? "Saving..." : "Save Linear API key"}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={() => {
-                      void saveLinearApiKeyMutation.mutateAsync(null);
-                    }}
-                    disabled={saveLinearApiKeyMutation.isPending}
-                  >
-                    Clear saved key
-                  </Button>
+                  <div className="flex flex-wrap items-center gap-2 md:col-span-2">
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => {
+                        void saveLinearCredentialMutation.mutateAsync({
+                          credentialId: editingLinearCredentialId,
+                          name: linearCredentialNameInput,
+                          apiKey: linearCredentialApiKeyInput,
+                        });
+                      }}
+                      disabled={
+                        saveLinearCredentialMutation.isPending ||
+                        linearCredentialNameInput.trim().length === 0 ||
+                        linearCredentialApiKeyInput.trim().length === 0
+                      }
+                    >
+                      {saveLinearCredentialMutation.isPending
+                        ? "Saving..."
+                        : editingLinearCredentialId
+                          ? "Update credential"
+                          : "Add credential"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setEditingLinearCredentialId(null);
+                        setLinearCredentialNameInput("");
+                        setLinearCredentialApiKeyInput("");
+                        setLinearCredentialMessage(null);
+                      }}
+                      disabled={saveLinearCredentialMutation.isPending}
+                    >
+                      Clear form
+                    </Button>
+                  </div>
                 </div>
 
-                {linearApiKeyMessage ? (
-                  <p className="text-xs text-muted-foreground">{linearApiKeyMessage}</p>
+                <div className="space-y-2">
+                  {(linearConfig?.credentials ?? []).length > 0 ? (
+                    (linearConfig?.credentials ?? []).map((credential) => (
+                      <div
+                        key={credential.id}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-foreground">
+                            {credential.name}
+                          </p>
+                          <p className="text-xs text-muted-foreground">
+                            {credential.source === "env"
+                              ? "Environment variable"
+                              : credential.updatedAt
+                                ? `Saved credential · updated ${new Date(credential.updatedAt).toLocaleString()}`
+                                : "Saved credential"}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {credential.source === "saved" ? (
+                            <>
+                              <Button
+                                size="xs"
+                                variant="outline"
+                                onClick={() => {
+                                  setEditingLinearCredentialId(credential.id);
+                                  setLinearCredentialNameInput(credential.name);
+                                  setLinearCredentialApiKeyInput("");
+                                  setLinearCredentialMessage(
+                                    `Editing "${credential.name}". Enter a replacement API key to update it.`,
+                                  );
+                                }}
+                              >
+                                Edit
+                              </Button>
+                              <Button
+                                size="xs"
+                                variant="ghost"
+                                onClick={() => {
+                                  void deleteLinearCredentialMutation.mutateAsync(credential.id);
+                                }}
+                                disabled={deleteLinearCredentialMutation.isPending}
+                              >
+                                Delete
+                              </Button>
+                            </>
+                          ) : (
+                            <span className="text-xs text-muted-foreground">Read only</span>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-border bg-background px-3 py-4 text-xs text-muted-foreground">
+                      No Linear credentials saved yet.
+                    </div>
+                  )}
+                </div>
+
+                {linearCredentialMessage ? (
+                  <p className="text-xs text-muted-foreground">{linearCredentialMessage}</p>
                 ) : null}
               </div>
             </section>

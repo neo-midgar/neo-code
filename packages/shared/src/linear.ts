@@ -1,5 +1,7 @@
 import type { LinearIssue, OrchestrationThreadActivity } from "@t3tools/contracts";
 
+import { normalizePullRequestWorktreeBranchPrefix } from "./git";
+
 export const LINEAR_THREAD_ACTIVITY_KIND = "linear.issue.linked";
 export const LINEAR_THREAD_REPORTED_ACTIVITY_KIND = "linear.issue.reported";
 
@@ -34,9 +36,11 @@ export function normalizeLinearIssueReference(raw: string): string | null {
 }
 
 export function buildLinearIssueBranchName(input: {
+  readonly prefix?: string | null | undefined;
   readonly identifier: string;
   readonly title: string;
 }): string {
+  const prefix = normalizePullRequestWorktreeBranchPrefix(input.prefix);
   const identifier = input.identifier.trim().toLowerCase();
   const title = input.title
     .trim()
@@ -48,7 +52,7 @@ export function buildLinearIssueBranchName(input: {
     .slice(0, 48)
     .replace(/[./_-]+$/g, "");
 
-  return `linear/${identifier}${title.length > 0 ? `-${title}` : ""}`;
+  return `${prefix}/${identifier}${title.length > 0 ? `-${title}` : ""}`;
 }
 
 export function toLinearAppUrl(raw: string): string | null {
@@ -96,6 +100,27 @@ export function extractLinkedLinearIssueFromActivities(
       Array.isArray(issueRecord.availableStates)
     ) {
       return issueRecord as LinearIssue;
+    }
+  }
+
+  return null;
+}
+
+export function extractLinkedLinearCredentialIdFromActivities(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): string | null {
+  for (let index = activities.length - 1; index >= 0; index -= 1) {
+    const activity = activities[index];
+    if (!activity || activity.kind !== LINEAR_THREAD_ACTIVITY_KIND) {
+      continue;
+    }
+    const payload = asRecord(activity.payload);
+    if (!payload || typeof payload.credentialId !== "string") {
+      continue;
+    }
+    const credentialId = payload.credentialId.trim();
+    if (credentialId.length > 0) {
+      return credentialId;
     }
   }
 

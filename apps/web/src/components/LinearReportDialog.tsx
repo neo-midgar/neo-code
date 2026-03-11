@@ -2,7 +2,10 @@ import type { LinearIssue } from "@t3tools/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import { linearIssueQueryOptions, linearReportThreadMutationOptions } from "~/lib/linearReactQuery";
+import {
+  linearIssueQueryOptionsWithCredential,
+  linearReportThreadMutationOptions,
+} from "~/lib/linearReactQuery";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Button } from "./ui/button";
 import {
@@ -21,6 +24,7 @@ interface LinearReportDialogProps {
   open: boolean;
   threadId: string | null;
   linkedIssue: LinearIssue | null;
+  linkedCredentialId?: string | null;
   onOpenChange: (open: boolean) => void;
   onReported?: (result: { commentUrl: string | null }) => void;
 }
@@ -31,6 +35,7 @@ export function LinearReportDialog({
   open,
   threadId,
   linkedIssue,
+  linkedCredentialId,
   onOpenChange,
   onReported,
 }: LinearReportDialogProps) {
@@ -38,7 +43,10 @@ export function LinearReportDialog({
   const [note, setNote] = useState("");
   const [stateId, setStateId] = useState("");
   const issueQuery = useQuery(
-    linearIssueQueryOptions(open ? (linkedIssue?.identifier ?? null) : null),
+    linearIssueQueryOptionsWithCredential({
+      reference: open ? (linkedIssue?.identifier ?? null) : null,
+      credentialId: linkedCredentialId ?? null,
+    }),
   );
   const reportMutation = useMutation(linearReportThreadMutationOptions({ threadId, queryClient }));
   const issue = issueQuery.data?.issue ?? linkedIssue;

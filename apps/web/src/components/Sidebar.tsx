@@ -46,7 +46,10 @@ import { useStore } from "../store";
 import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
 import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import {
+  serverConfigQueryOptions,
+  serverLinearProjectBindingsQueryOptions,
+} from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../composerDraftStore";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
@@ -286,6 +289,7 @@ export default function Sidebar() {
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
+  const linearProjectBindingsQuery = useQuery(serverLinearProjectBindingsQueryOptions());
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
   const [addingProject, setAddingProject] = useState(false);
@@ -327,6 +331,13 @@ export default function Sidebar() {
     }
     return map;
   }, [threads]);
+  const linearBindingByProjectId = useMemo(() => {
+    return new Map(
+      (linearProjectBindingsQuery.data?.bindings ?? []).map(
+        (binding) => [binding.projectId, binding] as const,
+      ),
+    );
+  }, [linearProjectBindingsQuery.data?.bindings]);
   const projectCwdById = useMemo(
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
@@ -1437,6 +1448,7 @@ export default function Sidebar() {
                 strategy={verticalListSortingStrategy}
               >
                 {projects.map((project) => {
+                  const linearBinding = linearBindingByProjectId.get(project.id);
                   const projectThreads = threads
                     .filter((thread) => thread.projectId === project.id)
                     .toSorted((a, b) => {
@@ -1480,8 +1492,15 @@ export default function Sidebar() {
                                 }`}
                               />
                               <ProjectFavicon cwd={project.cwd} />
-                              <span className="flex-1 truncate text-xs font-medium text-foreground/90">
-                                {project.name}
+                              <span className="flex min-w-0 flex-1 items-center gap-1.5">
+                                <span className="truncate text-xs font-medium text-foreground/90">
+                                  {project.name}
+                                </span>
+                                {linearBinding ? (
+                                  <span className="max-w-28 truncate rounded-full border border-border/70 bg-background/80 px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                                    {linearBinding.credentialName} · {linearBinding.teamKey}
+                                  </span>
+                                ) : null}
                               </span>
                             </SidebarMenuButton>
                             <Tooltip>

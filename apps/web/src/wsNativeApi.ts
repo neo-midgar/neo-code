@@ -168,9 +168,13 @@ export function createWsNativeApi(): NativeApi {
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
       getLinearConfig: () => transport.request(WS_METHODS.serverGetLinearConfig),
+      getLinearProjectBindings: () => transport.request(WS_METHODS.serverGetLinearProjectBindings),
       getProjectLinearBinding: (input) =>
         transport.request(WS_METHODS.serverGetProjectLinearBinding, input),
-      setLinearApiKey: (input) => transport.request(WS_METHODS.serverSetLinearApiKey, input),
+      upsertLinearCredential: (input) =>
+        transport.request(WS_METHODS.serverUpsertLinearCredential, input),
+      deleteLinearCredential: (input) =>
+        transport.request(WS_METHODS.serverDeleteLinearCredential, input),
       setProjectLinearBinding: (input) =>
         transport.request(WS_METHODS.serverSetProjectLinearBinding, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),

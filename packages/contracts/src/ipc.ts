@@ -39,10 +39,12 @@ import type {
 } from "./project";
 import type { ServerConfig } from "./server";
 import type {
+  ServerDeleteLinearCredentialInput,
+  ServerGetLinearProjectBindingsResult,
   ServerGetProjectLinearBindingInput,
   ServerLinearConfig,
   ServerLinearProjectBinding,
-  ServerSetLinearApiKeyInput,
+  ServerUpsertLinearCredentialInput,
   ServerSetProjectLinearBindingInput,
 } from "./server";
 import type {
@@ -189,10 +191,16 @@ export interface NativeApi {
   server: {
     getConfig: () => Promise<ServerConfig>;
     getLinearConfig: () => Promise<ServerLinearConfig>;
+    getLinearProjectBindings: () => Promise<ServerGetLinearProjectBindingsResult>;
     getProjectLinearBinding: (
       input: ServerGetProjectLinearBindingInput,
     ) => Promise<ServerLinearProjectBinding | null>;
-    setLinearApiKey: (input: ServerSetLinearApiKeyInput) => Promise<ServerLinearConfig>;
+    upsertLinearCredential: (
+      input: ServerUpsertLinearCredentialInput,
+    ) => Promise<ServerLinearConfig>;
+    deleteLinearCredential: (
+      input: ServerDeleteLinearCredentialInput,
+    ) => Promise<ServerLinearConfig>;
     setProjectLinearBinding: (
       input: ServerSetProjectLinearBindingInput,
     ) => Promise<ServerLinearProjectBinding | null>;

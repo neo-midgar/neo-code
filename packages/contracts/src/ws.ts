@@ -45,8 +45,9 @@ import { ProjectSearchEntriesInput, ProjectWriteFileInput } from "./project";
 import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
+  ServerDeleteLinearCredentialInput,
   ServerGetProjectLinearBindingInput,
-  ServerSetLinearApiKeyInput,
+  ServerUpsertLinearCredentialInput,
   ServerSetProjectLinearBindingInput,
 } from "./server";
 
@@ -95,8 +96,10 @@ export const WS_METHODS = {
   // Server meta
   serverGetConfig: "server.getConfig",
   serverGetLinearConfig: "server.getLinearConfig",
+  serverGetLinearProjectBindings: "server.getLinearProjectBindings",
   serverGetProjectLinearBinding: "server.getProjectLinearBinding",
-  serverSetLinearApiKey: "server.setLinearApiKey",
+  serverUpsertLinearCredential: "server.upsertLinearCredential",
+  serverDeleteLinearCredential: "server.deleteLinearCredential",
   serverSetProjectLinearBinding: "server.setProjectLinearBinding",
   serverUpsertKeybinding: "server.upsertKeybinding",
 } as const;
@@ -171,8 +174,10 @@ const WebSocketRequestBody = Schema.Union([
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetLinearConfig, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverGetLinearProjectBindings, Schema.Struct({})),
   tagRequestBody(WS_METHODS.serverGetProjectLinearBinding, ServerGetProjectLinearBindingInput),
-  tagRequestBody(WS_METHODS.serverSetLinearApiKey, ServerSetLinearApiKeyInput),
+  tagRequestBody(WS_METHODS.serverUpsertLinearCredential, ServerUpsertLinearCredentialInput),
+  tagRequestBody(WS_METHODS.serverDeleteLinearCredential, ServerDeleteLinearCredentialInput),
   tagRequestBody(WS_METHODS.serverSetProjectLinearBinding, ServerSetProjectLinearBindingInput),
   tagRequestBody(WS_METHODS.serverUpsertKeybinding, KeybindingRule),
 ]);

@@ -301,7 +301,10 @@ function mapIssueSummary(issue: LinearGraphqlIssueSummary): LinearIssueSummary {
   };
 }
 
-function mapTeam(team: LinearGraphqlTeam): LinearTeam | null {
+function mapTeam(
+  team: LinearGraphqlTeam,
+  credential: { readonly id: string; readonly name: string },
+): LinearTeam | null {
   const id = team.id.trim();
   const key = team.key?.trim() ?? "";
   const name = team.name?.trim() ?? "";
@@ -312,6 +315,8 @@ function mapTeam(team: LinearGraphqlTeam): LinearTeam | null {
     id,
     key,
     name,
+    credentialId: credential.id,
+    credentialName: credential.name,
   };
 }
 
@@ -403,8 +408,8 @@ const makeLinearService = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const serverSettings = yield* ServerSettings;
 
-  const ensureLinearApiKey = Effect.fn(function* () {
-    const apiKey = yield* serverSettings.getLinearApiKey().pipe(
+  const ensureLinearApiKey = Effect.fn(function* (credentialId?: string | null) {
+    const apiKey = yield* serverSettings.resolveLinearApiKey(credentialId).pipe(
       Effect.mapError(
         (error) =>
           new LinearIntegrationError({
@@ -430,8 +435,9 @@ const makeLinearService = Effect.gen(function* () {
     readonly operation: string;
     readonly query: string;
     readonly variables: Record<string, unknown>;
+    readonly credentialId?: string | null | undefined;
   }) {
-    const apiKey = yield* ensureLinearApiKey();
+    const apiKey = yield* ensureLinearApiKey(input.credentialId);
     const response = yield* Effect.tryPromise({
       try: () =>
         fetch(LINEAR_GRAPHQL_URL, {
@@ -501,7 +507,7 @@ const makeLinearService = Effect.gen(function* () {
     return json.data;
   });
 
-  const loadIssue = Effect.fn(function* (reference: string) {
+  const loadIssue = Effect.fn(function* (reference: string, credentialId?: string | null) {
     const identifier = normalizeLinearIssueReference(reference);
     if (!identifier) {
       return yield* Effect.fail(
@@ -518,6 +524,7 @@ const makeLinearService = Effect.gen(function* () {
       operation: "getIssue",
       query: LINEAR_ISSUE_QUERY,
       variables: { identifier },
+      credentialId,
     });
 
     const issue = result.issue;
@@ -535,16 +542,49 @@ const makeLinearService = Effect.gen(function* () {
 
   const listTeams: LinearServiceShape["listTeams"] = () =>
     Effect.gen(function* () {
-      const result = yield* requestGraphql<{
-        readonly teams: { readonly nodes: ReadonlyArray<LinearGraphqlTeam> };
-      }>({
-        operation: "listTeams",
-        query: LINEAR_TEAMS_QUERY,
-        variables: {},
-      });
+      const credentials = yield* serverSettings.listLinearCredentials().pipe(
+        Effect.mapError(
+          (error) =>
+            new LinearIntegrationError({
+              operation: "listTeams",
+              detail: error.message,
+              cause: error,
+            }),
+        ),
+      );
+      if (credentials.length === 0) {
+        yield* ensureLinearApiKey();
+      }
+
+      const results = yield* Effect.forEach(
+        credentials,
+        (credential) =>
+          requestGraphql<{
+            readonly teams: { readonly nodes: ReadonlyArray<LinearGraphqlTeam> };
+          }>({
+            operation: "listTeams",
+            query: LINEAR_TEAMS_QUERY,
+            variables: {},
+            credentialId: credential.id,
+          }).pipe(
+            Effect.map((result) =>
+              result.teams.nodes
+                .map((team) => mapTeam(team, credential))
+                .filter((team): team is LinearTeam => team !== null),
+            ),
+            Effect.catch(() => Effect.succeed([])),
+          ),
+        { concurrency: 1 },
+      );
 
       return {
-        teams: result.teams.nodes.map(mapTeam).filter((team): team is LinearTeam => team !== null),
+        teams: results
+          .flat()
+          .toSorted((left, right) =>
+            `${left.credentialName}:${left.key}`.localeCompare(
+              `${right.credentialName}:${right.key}`,
+            ),
+          ),
       };
     });
 
@@ -594,6 +634,7 @@ const makeLinearService = Effect.gen(function* () {
           teamId: binding.teamId,
           first: input.limit,
         },
+        credentialId: binding.credentialId,
       });
 
       if (!result.team) {
@@ -713,7 +754,7 @@ const makeLinearService = Effect.gen(function* () {
   });
 
   const getIssue: LinearServiceShape["getIssue"] = (input) =>
-    loadIssue(input.reference).pipe(Effect.map((issue) => ({ issue })));
+    loadIssue(input.reference, input.credentialId).pipe(Effect.map((issue) => ({ issue })));
 
   const importIssue: LinearServiceShape["importIssue"] = (input) =>
     Effect.gen(function* () {
@@ -730,7 +771,19 @@ const makeLinearService = Effect.gen(function* () {
         );
       }
 
-      const issue = yield* loadIssue(input.reference);
+      const binding = yield* serverSettings.getLinearProjectBinding(project.id).pipe(
+        Effect.mapError(
+          (error) =>
+            new LinearIntegrationError({
+              operation: "importIssue",
+              detail: error.message,
+              cause: error,
+            }),
+        ),
+      );
+      const credentialId = input.credentialId ?? binding?.credentialId ?? null;
+      const credentialName = binding?.credentialName ?? null;
+      const issue = yield* loadIssue(input.reference, credentialId);
       let branch: string | null = null;
       let worktreePath: string | null = null;
 
@@ -751,6 +804,7 @@ const makeLinearService = Effect.gen(function* () {
 
         const localBranches = yield* git.listLocalBranchNames(project.workspaceRoot);
         const requestedBranch = buildLinearIssueBranchName({
+          prefix: input.branchPrefix,
           identifier: issue.identifier,
           title: issue.title,
         });
@@ -796,6 +850,8 @@ const makeLinearService = Effect.gen(function* () {
         summary: `Linked Linear issue ${issue.identifier}`,
         payload: {
           issue,
+          credentialId,
+          credentialName,
           importedAt: createdAt,
         },
       });
@@ -872,7 +928,20 @@ const makeLinearService = Effect.gen(function* () {
         );
       }
 
-      const issue = yield* loadIssue(linkedIssueIdentifier);
+      const linkedCredentialId =
+        linkedActivity &&
+        typeof linkedActivity.payload === "object" &&
+        linkedActivity.payload !== null &&
+        "credentialId" in linkedActivity.payload &&
+        typeof (linkedActivity.payload as { credentialId?: unknown }).credentialId === "string"
+          ? (linkedActivity.payload as { credentialId: string }).credentialId
+          : null;
+      const binding = yield* serverSettings
+        .getLinearProjectBinding(thread.projectId)
+        .pipe(Effect.catch(() => Effect.succeed(null)));
+      const credentialId = linkedCredentialId ?? binding?.credentialId ?? null;
+
+      const issue = yield* loadIssue(linkedIssueIdentifier, credentialId);
       const gitCwd =
         thread.worktreePath ??
         snapshot.projects.find((entry) => entry.id === thread.projectId)?.workspaceRoot ??
@@ -919,6 +988,7 @@ const makeLinearService = Effect.gen(function* () {
           issueId: linkedIssueId,
           body: reportLines.join("\n"),
         },
+        credentialId,
       });
 
       const createdComment = commentCreate.commentCreate.comment;
@@ -945,6 +1015,7 @@ const makeLinearService = Effect.gen(function* () {
             issueId: linkedIssueId,
             stateId: input.stateId,
           },
+          credentialId,
         });
 
         if (!stateUpdate.issueUpdate.success) {

@@ -2,37 +2,83 @@ import { Effect, FileSystem, Layer, Path, Schema, ServiceMap } from "effect";
 
 import { ServerConfig } from "./config";
 
+const ENV_LINEAR_CREDENTIAL_ID = "env";
+const ENV_LINEAR_CREDENTIAL_NAME = "Environment";
+const LEGACY_LINEAR_CREDENTIAL_ID = "saved-default";
+const LEGACY_LINEAR_CREDENTIAL_NAME = "Default";
+
 interface PersistedServerSettings {
   readonly linearApiKey?: string;
+  readonly linearCredentials?: Record<string, PersistedLinearCredential>;
   readonly linearProjectBindings?: Record<string, PersistedLinearProjectBinding>;
 }
 
+interface PersistedLinearCredential {
+  readonly name: string;
+  readonly apiKey: string;
+  readonly updatedAt: string;
+}
+
 interface PersistedLinearProjectBinding {
+  readonly credentialId?: string;
+  readonly credentialName?: string;
   readonly teamId: string;
   readonly teamKey: string;
   readonly teamName: string;
   readonly updatedAt: string;
 }
 
-export interface LinearCredentialSummary {
+export interface LinearCredential {
+  readonly id: string;
+  readonly name: string;
+  readonly source: "env" | "saved";
+  readonly updatedAt: string | null;
+}
+
+export interface LinearConfig {
   readonly configured: boolean;
   readonly source: "env" | "saved" | "none";
+  readonly credentials: ReadonlyArray<LinearCredential>;
+}
+
+export interface LinearProjectBinding {
+  readonly projectId: string;
+  readonly credentialId: string;
+  readonly credentialName: string;
+  readonly teamId: string;
+  readonly teamKey: string;
+  readonly teamName: string;
+  readonly updatedAt: string;
 }
 
 export interface ServerSettingsShape {
-  readonly getLinearApiKey: () => Effect.Effect<string | null, ServerSettingsError>;
-  readonly getLinearCredentialSummary: () => Effect.Effect<
-    LinearCredentialSummary,
+  readonly getLinearConfig: () => Effect.Effect<LinearConfig, ServerSettingsError>;
+  readonly listLinearCredentials: () => Effect.Effect<
+    ReadonlyArray<LinearCredential>,
+    ServerSettingsError
+  >;
+  readonly resolveLinearApiKey: (
+    credentialId?: string | null,
+  ) => Effect.Effect<string | null, ServerSettingsError>;
+  readonly listLinearProjectBindings: () => Effect.Effect<
+    ReadonlyArray<LinearProjectBinding>,
     ServerSettingsError
   >;
   readonly getLinearProjectBinding: (
     projectId: string,
   ) => Effect.Effect<LinearProjectBinding | null, ServerSettingsError>;
-  readonly setLinearApiKey: (
-    apiKey: string | null,
-  ) => Effect.Effect<LinearCredentialSummary, ServerSettingsError>;
+  readonly upsertLinearCredential: (input: {
+    readonly credentialId?: string | null | undefined;
+    readonly name: string;
+    readonly apiKey: string;
+  }) => Effect.Effect<LinearConfig, ServerSettingsError>;
+  readonly deleteLinearCredential: (
+    credentialId: string,
+  ) => Effect.Effect<LinearConfig, ServerSettingsError>;
   readonly setLinearProjectBinding: (input: {
     readonly projectId: string;
+    readonly credentialId: string | null;
+    readonly credentialName: string | null;
     readonly teamId: string | null;
     readonly teamKey: string | null;
     readonly teamName: string | null;
@@ -56,14 +102,6 @@ export class ServerSettingsError extends Schema.TaggedErrorClass<ServerSettingsE
   }
 }
 
-export interface LinearProjectBinding {
-  readonly projectId: string;
-  readonly teamId: string;
-  readonly teamKey: string;
-  readonly teamName: string;
-  readonly updatedAt: string;
-}
-
 const emptySettings = (): PersistedServerSettings => ({});
 
 const normalizeStoredKey = (value: string | null | undefined): string | null => {
@@ -84,38 +122,31 @@ const ensureIsoTimestamp = (value: string): string | null => {
   return new Date(parsed).toISOString();
 };
 
-const normalizeLinearProjectBinding = (input: {
-  readonly projectId: string;
-  readonly binding: PersistedLinearProjectBinding;
-}): LinearProjectBinding | null => {
-  const projectId = normalizeStoredString(input.projectId);
-  const teamId = normalizeStoredString(input.binding.teamId);
-  const teamKey = normalizeStoredString(input.binding.teamKey);
-  const teamName = normalizeStoredString(input.binding.teamName);
-  const updatedAt = ensureIsoTimestamp(input.binding.updatedAt);
-  if (!projectId || !teamId || !teamKey || !teamName || !updatedAt) {
-    return null;
-  }
+function sortLinearCredentials(
+  credentials: ReadonlyArray<LinearCredential>,
+): ReadonlyArray<LinearCredential> {
+  return [...credentials].toSorted((left, right) => {
+    if (left.source !== right.source) {
+      return left.source === "env" ? -1 : 1;
+    }
+    const leftUpdatedAt = left.updatedAt ? Date.parse(left.updatedAt) : -1;
+    const rightUpdatedAt = right.updatedAt ? Date.parse(right.updatedAt) : -1;
+    if (leftUpdatedAt !== rightUpdatedAt) {
+      return rightUpdatedAt - leftUpdatedAt;
+    }
+    return left.name.localeCompare(right.name);
+  });
+}
 
+function summarizeLinearConfig(credentials: ReadonlyArray<LinearCredential>): LinearConfig {
+  const orderedCredentials = sortLinearCredentials(credentials);
+  const hasEnvCredential = orderedCredentials.some((credential) => credential.source === "env");
   return {
-    projectId,
-    teamId,
-    teamKey,
-    teamName,
-    updatedAt,
+    configured: orderedCredentials.length > 0,
+    source: hasEnvCredential ? "env" : orderedCredentials.length > 0 ? "saved" : "none",
+    credentials: orderedCredentials,
   };
-};
-
-const summarizeCredentialSource = (savedKey: string | null): LinearCredentialSummary => {
-  const envKey = normalizeStoredKey(process.env.LINEAR_API_KEY);
-  if (envKey) {
-    return { configured: true, source: "env" };
-  }
-  if (savedKey) {
-    return { configured: true, source: "saved" };
-  }
-  return { configured: false, source: "none" };
-};
+}
 
 const makeServerSettings = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
@@ -158,23 +189,25 @@ const makeServerSettings = Effect.gen(function* () {
         });
       }
 
-      const linearApiKeyValue = (raw as Record<string, unknown>).linearApiKey;
-      let normalizedKey: string | undefined;
-      if (linearApiKeyValue !== undefined && typeof linearApiKeyValue !== "string") {
-        return yield* new ServerSettingsError({
-          operation: "readPersistedSettings",
-          detail: "The saved Linear API key must be a string.",
-        });
-      }
-      if (typeof linearApiKeyValue === "string") {
-        normalizedKey = normalizeStoredKey(linearApiKeyValue) ?? undefined;
-        if (!normalizedKey) {
+      const rawRecord = raw as Record<string, unknown>;
+      const legacyLinearApiKeyValue = rawRecord.linearApiKey;
+      let legacyLinearApiKey: string | null = null;
+      if (legacyLinearApiKeyValue !== undefined) {
+        if (typeof legacyLinearApiKeyValue !== "string") {
+          return yield* new ServerSettingsError({
+            operation: "readPersistedSettings",
+            detail: "The saved Linear API key must be a string.",
+          });
+        }
+
+        legacyLinearApiKey = normalizeStoredKey(legacyLinearApiKeyValue);
+        if (!legacyLinearApiKey) {
           return yield* new ServerSettingsError({
             operation: "readPersistedSettings",
             detail: "The saved Linear API key cannot be empty.",
           });
         }
-        if (normalizedKey.length > 4096) {
+        if (legacyLinearApiKey.length > 4096) {
           return yield* new ServerSettingsError({
             operation: "readPersistedSettings",
             detail: "The saved Linear API key is too long.",
@@ -182,7 +215,83 @@ const makeServerSettings = Effect.gen(function* () {
         }
       }
 
-      const linearProjectBindingsValue = (raw as Record<string, unknown>).linearProjectBindings;
+      const linearCredentialsValue = rawRecord.linearCredentials;
+      let linearCredentials: Record<string, PersistedLinearCredential> | undefined;
+      if (linearCredentialsValue !== undefined) {
+        if (
+          linearCredentialsValue === null ||
+          typeof linearCredentialsValue !== "object" ||
+          Array.isArray(linearCredentialsValue)
+        ) {
+          return yield* new ServerSettingsError({
+            operation: "readPersistedSettings",
+            detail: "Saved Linear credentials must be a JSON object.",
+          });
+        }
+
+        linearCredentials = {};
+        for (const [credentialId, candidate] of Object.entries(linearCredentialsValue)) {
+          if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+            return yield* new ServerSettingsError({
+              operation: "readPersistedSettings",
+              detail: `Saved Linear credential '${credentialId}' is invalid.`,
+            });
+          }
+
+          const candidateRecord = candidate as Record<string, unknown>;
+          const name = normalizeStoredString(
+            typeof candidateRecord.name === "string" ? candidateRecord.name : null,
+          );
+          const apiKey = normalizeStoredKey(
+            typeof candidateRecord.apiKey === "string" ? candidateRecord.apiKey : null,
+          );
+          const updatedAt =
+            typeof candidateRecord.updatedAt === "string"
+              ? ensureIsoTimestamp(candidateRecord.updatedAt)
+              : null;
+          if (!name || !apiKey || !updatedAt) {
+            return yield* new ServerSettingsError({
+              operation: "readPersistedSettings",
+              detail: `Saved Linear credential '${credentialId}' is missing required fields.`,
+            });
+          }
+
+          linearCredentials[credentialId] = {
+            name,
+            apiKey,
+            updatedAt,
+          };
+        }
+      }
+
+      if (
+        legacyLinearApiKey &&
+        (!linearCredentials || Object.keys(linearCredentials).length === 0)
+      ) {
+        linearCredentials = {
+          [LEGACY_LINEAR_CREDENTIAL_ID]: {
+            name: LEGACY_LINEAR_CREDENTIAL_NAME,
+            apiKey: legacyLinearApiKey,
+            updatedAt: new Date(0).toISOString(),
+          },
+        };
+      }
+
+      const normalizedCredentials = Object.entries(linearCredentials ?? {}).map(
+        ([credentialId, credential]) => ({
+          id: credentialId,
+          name: credential.name,
+        }),
+      );
+
+      const defaultBindingCredential =
+        normalizedCredentials.length === 1
+          ? normalizedCredentials[0]
+          : normalizedCredentials.length === 0 && normalizeStoredKey(process.env.LINEAR_API_KEY)
+            ? { id: ENV_LINEAR_CREDENTIAL_ID, name: ENV_LINEAR_CREDENTIAL_NAME }
+            : null;
+
+      const linearProjectBindingsValue = rawRecord.linearProjectBindings;
       let linearProjectBindings: Record<string, PersistedLinearProjectBinding> | undefined;
       if (linearProjectBindingsValue !== undefined) {
         if (
@@ -206,6 +315,16 @@ const makeServerSettings = Effect.gen(function* () {
           }
 
           const candidateRecord = candidate as Record<string, unknown>;
+          const credentialId = normalizeStoredString(
+            typeof candidateRecord.credentialId === "string"
+              ? candidateRecord.credentialId
+              : defaultBindingCredential?.id,
+          );
+          const credentialName = normalizeStoredString(
+            typeof candidateRecord.credentialName === "string"
+              ? candidateRecord.credentialName
+              : defaultBindingCredential?.name,
+          );
           const teamId = normalizeStoredString(
             typeof candidateRecord.teamId === "string" ? candidateRecord.teamId : null,
           );
@@ -219,7 +338,7 @@ const makeServerSettings = Effect.gen(function* () {
             typeof candidateRecord.updatedAt === "string"
               ? ensureIsoTimestamp(candidateRecord.updatedAt)
               : null;
-          if (!teamId || !teamKey || !teamName || !updatedAt) {
+          if (!credentialId || !credentialName || !teamId || !teamKey || !teamName || !updatedAt) {
             return yield* new ServerSettingsError({
               operation: "readPersistedSettings",
               detail: `Saved Linear binding for project '${projectId}' is missing required fields.`,
@@ -227,6 +346,8 @@ const makeServerSettings = Effect.gen(function* () {
           }
 
           linearProjectBindings[projectId] = {
+            credentialId,
+            credentialName,
             teamId,
             teamKey,
             teamName,
@@ -236,8 +357,12 @@ const makeServerSettings = Effect.gen(function* () {
       }
 
       return {
-        ...(normalizedKey ? { linearApiKey: normalizedKey } : {}),
-        ...(linearProjectBindings ? { linearProjectBindings } : {}),
+        ...(linearCredentials && Object.keys(linearCredentials).length > 0
+          ? { linearCredentials }
+          : {}),
+        ...(linearProjectBindings && Object.keys(linearProjectBindings).length > 0
+          ? { linearProjectBindings }
+          : {}),
       };
     });
 
@@ -267,23 +392,108 @@ const makeServerSettings = Effect.gen(function* () {
       );
     });
 
-  const getLinearCredentialSummary = (): Effect.Effect<
-    LinearCredentialSummary,
+  const listLinearCredentials = (): Effect.Effect<
+    ReadonlyArray<LinearCredential>,
     ServerSettingsError
   > =>
     Effect.gen(function* () {
-      const savedKey = normalizeStoredKey((yield* readPersistedSettings()).linearApiKey);
-      return summarizeCredentialSource(savedKey);
+      const persisted = yield* readPersistedSettings();
+      const credentials: LinearCredential[] = [];
+      const envKey = normalizeStoredKey(process.env.LINEAR_API_KEY);
+      if (envKey) {
+        credentials.push({
+          id: ENV_LINEAR_CREDENTIAL_ID,
+          name: ENV_LINEAR_CREDENTIAL_NAME,
+          source: "env",
+          updatedAt: null,
+        });
+      }
+
+      for (const [credentialId, credential] of Object.entries(persisted.linearCredentials ?? {})) {
+        credentials.push({
+          id: credentialId,
+          name: credential.name,
+          source: "saved",
+          updatedAt: credential.updatedAt,
+        });
+      }
+
+      return sortLinearCredentials(credentials);
     });
 
-  const getLinearApiKey = (): Effect.Effect<string | null, ServerSettingsError> =>
+  const getLinearConfig = (): Effect.Effect<LinearConfig, ServerSettingsError> =>
+    listLinearCredentials().pipe(Effect.map((credentials) => summarizeLinearConfig(credentials)));
+
+  const resolveLinearApiKey = (
+    credentialId?: string | null,
+  ): Effect.Effect<string | null, ServerSettingsError> =>
     Effect.gen(function* () {
+      const normalizedCredentialId = normalizeStoredString(credentialId);
       const envKey = normalizeStoredKey(process.env.LINEAR_API_KEY);
+
+      if (normalizedCredentialId) {
+        if (normalizedCredentialId === ENV_LINEAR_CREDENTIAL_ID) {
+          return envKey;
+        }
+        const persisted = yield* readPersistedSettings();
+        return normalizeStoredKey(persisted.linearCredentials?.[normalizedCredentialId]?.apiKey);
+      }
+
       if (envKey) {
         return envKey;
       }
+
       const persisted = yield* readPersistedSettings();
-      return normalizeStoredKey(persisted.linearApiKey);
+      const fallbackCredential = Object.values(persisted.linearCredentials ?? {}).toSorted(
+        (left, right) => right.updatedAt.localeCompare(left.updatedAt),
+      )[0];
+      return normalizeStoredKey(fallbackCredential?.apiKey);
+    });
+
+  const normalizeLinearProjectBinding = (input: {
+    readonly projectId: string;
+    readonly binding: PersistedLinearProjectBinding;
+  }): LinearProjectBinding | null => {
+    const projectId = normalizeStoredString(input.projectId);
+    const credentialId = normalizeStoredString(input.binding.credentialId);
+    const credentialName = normalizeStoredString(input.binding.credentialName);
+    const teamId = normalizeStoredString(input.binding.teamId);
+    const teamKey = normalizeStoredString(input.binding.teamKey);
+    const teamName = normalizeStoredString(input.binding.teamName);
+    const updatedAt = ensureIsoTimestamp(input.binding.updatedAt);
+    if (
+      !projectId ||
+      !credentialId ||
+      !credentialName ||
+      !teamId ||
+      !teamKey ||
+      !teamName ||
+      !updatedAt
+    ) {
+      return null;
+    }
+
+    return {
+      projectId,
+      credentialId,
+      credentialName,
+      teamId,
+      teamKey,
+      teamName,
+      updatedAt,
+    };
+  };
+
+  const listLinearProjectBindings = (): Effect.Effect<
+    ReadonlyArray<LinearProjectBinding>,
+    ServerSettingsError
+  > =>
+    Effect.gen(function* () {
+      const persisted = yield* readPersistedSettings();
+      return Object.entries(persisted.linearProjectBindings ?? {})
+        .map(([projectId, binding]) => normalizeLinearProjectBinding({ projectId, binding }))
+        .filter((binding): binding is LinearProjectBinding => binding !== null)
+        .toSorted((left, right) => left.projectId.localeCompare(right.projectId));
     });
 
   const getLinearProjectBinding = (
@@ -316,30 +526,118 @@ const makeServerSettings = Effect.gen(function* () {
       return normalizedBinding;
     });
 
-  const setLinearApiKey = (
-    apiKey: string | null,
-  ): Effect.Effect<LinearCredentialSummary, ServerSettingsError> =>
+  const upsertLinearCredential = (input: {
+    readonly credentialId?: string | null | undefined;
+    readonly name: string;
+    readonly apiKey: string;
+  }): Effect.Effect<LinearConfig, ServerSettingsError> =>
     Effect.gen(function* () {
-      const normalizedKey = normalizeStoredKey(apiKey);
-      if (normalizedKey && normalizedKey.length > 4096) {
+      const credentialId = normalizeStoredString(input.credentialId) ?? crypto.randomUUID();
+      if (credentialId === ENV_LINEAR_CREDENTIAL_ID) {
         return yield* new ServerSettingsError({
-          operation: "setLinearApiKey",
+          operation: "upsertLinearCredential",
+          detail: "The environment credential cannot be modified from Settings.",
+        });
+      }
+
+      const name = normalizeStoredString(input.name);
+      if (!name) {
+        return yield* new ServerSettingsError({
+          operation: "upsertLinearCredential",
+          detail: "Credential name is required.",
+        });
+      }
+      if (name.length > 128) {
+        return yield* new ServerSettingsError({
+          operation: "upsertLinearCredential",
+          detail: "Credential name is too long.",
+        });
+      }
+
+      const apiKey = normalizeStoredKey(input.apiKey);
+      if (!apiKey) {
+        return yield* new ServerSettingsError({
+          operation: "upsertLinearCredential",
+          detail: "Linear API key is required.",
+        });
+      }
+      if (apiKey.length > 4096) {
+        return yield* new ServerSettingsError({
+          operation: "upsertLinearCredential",
           detail: "The Linear API key is too long.",
         });
       }
 
       const persisted = yield* readPersistedSettings();
-      const nextSettings: PersistedServerSettings = normalizedKey
-        ? { ...persisted, linearApiKey: normalizedKey }
-        : persisted.linearProjectBindings
-          ? { linearProjectBindings: persisted.linearProjectBindings }
-          : {};
-      yield* writePersistedSettings(nextSettings);
-      return summarizeCredentialSource(normalizedKey);
+      const updatedAt = new Date().toISOString();
+      const nextCredentials = {
+        ...persisted.linearCredentials,
+        [credentialId]: {
+          name,
+          apiKey,
+          updatedAt,
+        },
+      };
+      const nextBindings = Object.fromEntries(
+        Object.entries(persisted.linearProjectBindings ?? {}).map(([projectId, binding]) => [
+          projectId,
+          binding.credentialId === credentialId
+            ? {
+                ...binding,
+                credentialName: name,
+              }
+            : binding,
+        ]),
+      );
+
+      yield* writePersistedSettings({
+        ...(Object.keys(nextCredentials).length > 0 ? { linearCredentials: nextCredentials } : {}),
+        ...(Object.keys(nextBindings).length > 0 ? { linearProjectBindings: nextBindings } : {}),
+      });
+
+      return yield* getLinearConfig();
+    });
+
+  const deleteLinearCredential = (
+    credentialId: string,
+  ): Effect.Effect<LinearConfig, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const normalizedCredentialId = normalizeStoredString(credentialId);
+      if (!normalizedCredentialId) {
+        return yield* new ServerSettingsError({
+          operation: "deleteLinearCredential",
+          detail: "Credential id is required.",
+        });
+      }
+      if (normalizedCredentialId === ENV_LINEAR_CREDENTIAL_ID) {
+        return yield* new ServerSettingsError({
+          operation: "deleteLinearCredential",
+          detail: "The environment credential cannot be deleted from Settings.",
+        });
+      }
+
+      const persisted = yield* readPersistedSettings();
+      const nextCredentials = { ...persisted.linearCredentials };
+      delete nextCredentials[normalizedCredentialId];
+
+      const nextBindings = Object.fromEntries(
+        Object.entries(persisted.linearProjectBindings ?? {}).filter(
+          ([, binding]) => binding.credentialId !== normalizedCredentialId,
+        ),
+      );
+
+      yield* writePersistedSettings({
+        ...(Object.keys(nextCredentials).length > 0 ? { linearCredentials: nextCredentials } : {}),
+        ...(Object.keys(nextBindings).length > 0 ? { linearProjectBindings: nextBindings } : {}),
+      });
+
+      return yield* getLinearConfig();
     });
 
   const setLinearProjectBinding = (input: {
     readonly projectId: string;
+    readonly credentialId: string | null;
+    readonly credentialName: string | null;
     readonly teamId: string | null;
     readonly teamKey: string | null;
     readonly teamName: string | null;
@@ -353,44 +651,59 @@ const makeServerSettings = Effect.gen(function* () {
         });
       }
 
+      const credentialId = normalizeStoredString(input.credentialId);
+      const credentialName = normalizeStoredString(input.credentialName);
       const teamId = normalizeStoredString(input.teamId);
       const teamKey = normalizeStoredString(input.teamKey);
       const teamName = normalizeStoredString(input.teamName);
       const persisted = yield* readPersistedSettings();
       const existingBindings = { ...persisted.linearProjectBindings };
 
-      if (!teamId && !teamKey && !teamName) {
+      if (!credentialId && !credentialName && !teamId && !teamKey && !teamName) {
         delete existingBindings[projectId];
-        const nextSettings: PersistedServerSettings = {
-          ...(persisted.linearApiKey ? { linearApiKey: persisted.linearApiKey } : {}),
+        yield* writePersistedSettings({
+          ...(persisted.linearCredentials && Object.keys(persisted.linearCredentials).length > 0
+            ? { linearCredentials: persisted.linearCredentials }
+            : {}),
           ...(Object.keys(existingBindings).length > 0
             ? { linearProjectBindings: existingBindings }
             : {}),
-        };
-        yield* writePersistedSettings(nextSettings);
+        });
         return null;
       }
 
-      if (!teamId || !teamKey || !teamName) {
+      if (!credentialId || !credentialName || !teamId || !teamKey || !teamName) {
         return yield* new ServerSettingsError({
           operation: "setLinearProjectBinding",
-          detail: "Team id, key, and name are required to bind a project.",
+          detail: "Credential, team id, key, and name are required to bind a project.",
+        });
+      }
+
+      const credentials = yield* listLinearCredentials();
+      if (!credentials.some((credential) => credential.id === credentialId)) {
+        return yield* new ServerSettingsError({
+          operation: "setLinearProjectBinding",
+          detail: "The selected Linear credential is no longer available.",
         });
       }
 
       const updatedAt = new Date().toISOString();
       const persistedBinding: PersistedLinearProjectBinding = {
+        credentialId,
+        credentialName,
         teamId,
         teamKey,
         teamName,
         updatedAt,
       };
       existingBindings[projectId] = persistedBinding;
-      const nextSettings: PersistedServerSettings = {
-        ...(persisted.linearApiKey ? { linearApiKey: persisted.linearApiKey } : {}),
+      yield* writePersistedSettings({
+        ...(persisted.linearCredentials && Object.keys(persisted.linearCredentials).length > 0
+          ? { linearCredentials: persisted.linearCredentials }
+          : {}),
         linearProjectBindings: existingBindings,
-      };
-      yield* writePersistedSettings(nextSettings);
+      });
+
       const normalizedBinding = normalizeLinearProjectBinding({
         projectId,
         binding: persistedBinding,
@@ -405,10 +718,13 @@ const makeServerSettings = Effect.gen(function* () {
     });
 
   return {
-    getLinearApiKey,
-    getLinearCredentialSummary,
+    getLinearConfig,
+    listLinearCredentials,
+    resolveLinearApiKey,
+    listLinearProjectBindings,
     getLinearProjectBinding,
-    setLinearApiKey,
+    upsertLinearCredential,
+    deleteLinearCredential,
     setLinearProjectBinding,
   } satisfies ServerSettingsShape;
 });

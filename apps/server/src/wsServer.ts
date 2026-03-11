@@ -884,16 +884,26 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         };
 
       case WS_METHODS.serverGetLinearConfig:
-        return yield* serverSettings.getLinearCredentialSummary();
+        return yield* serverSettings.getLinearConfig();
+
+      case WS_METHODS.serverGetLinearProjectBindings:
+        return {
+          bindings: yield* serverSettings.listLinearProjectBindings(),
+        };
 
       case WS_METHODS.serverGetProjectLinearBinding: {
         const body = stripRequestTag(request.body);
         return yield* serverSettings.getLinearProjectBinding(body.projectId);
       }
 
-      case WS_METHODS.serverSetLinearApiKey: {
+      case WS_METHODS.serverUpsertLinearCredential: {
         const body = stripRequestTag(request.body);
-        return yield* serverSettings.setLinearApiKey(body.apiKey);
+        return yield* serverSettings.upsertLinearCredential(body);
+      }
+
+      case WS_METHODS.serverDeleteLinearCredential: {
+        const body = stripRequestTag(request.body);
+        return yield* serverSettings.deleteLinearCredential(body.credentialId);
       }
 
       case WS_METHODS.serverSetProjectLinearBinding: {

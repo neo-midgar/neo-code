@@ -32,7 +32,11 @@ import {
   normalizeModelSlug,
   resolveModelSlugForProvider,
 } from "@t3tools/shared/model";
-import { extractLinkedLinearIssueFromActivities, toLinearAppUrl } from "@t3tools/shared/linear";
+import {
+  extractLinkedLinearCredentialIdFromActivities,
+  extractLinkedLinearIssueFromActivities,
+  toLinearAppUrl,
+} from "@t3tools/shared/linear";
 import {
   memo,
   useCallback,
@@ -967,6 +971,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
   const linkedLinearIssue = useMemo(
     () => extractLinkedLinearIssueFromActivities(threadActivities),
+    [threadActivities],
+  );
+  const linkedLinearCredentialId = useMemo(
+    () => extractLinkedLinearCredentialIdFromActivities(threadActivities),
     [threadActivities],
   );
   const workLogEntries = useMemo(
@@ -3650,6 +3658,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         open={linearReportDialogOpen}
         threadId={activeThreadId}
         linkedIssue={linkedLinearIssue}
+        linkedCredentialId={linkedLinearCredentialId}
         onOpenChange={setLinearReportDialogOpen}
         onReported={({ commentUrl }) => {
           if (!commentUrl) {

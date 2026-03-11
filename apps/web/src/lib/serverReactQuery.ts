@@ -6,6 +6,7 @@ export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
   linearConfig: () => ["server", "linear-config"] as const,
+  linearProjectBindings: () => ["server", "linear-project-bindings"] as const,
   projectLinearBinding: (projectId: string | null) =>
     ["server", "project-linear-binding", projectId] as const,
 };
@@ -43,6 +44,17 @@ export function serverProjectLinearBindingQueryOptions(projectId: string | null)
       return api.server.getProjectLinearBinding({ projectId: ProjectId.makeUnsafe(projectId) });
     },
     enabled: projectId !== null,
+    staleTime: 30_000,
+  });
+}
+
+export function serverLinearProjectBindingsQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.linearProjectBindings(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getLinearProjectBindings();
+    },
     staleTime: 30_000,
   });
 }

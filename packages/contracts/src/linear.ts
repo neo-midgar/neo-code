@@ -49,6 +49,8 @@ export const LinearTeam = Schema.Struct({
   id: TrimmedNonEmptyString,
   key: TrimmedNonEmptyString,
   name: TrimmedNonEmptyString,
+  credentialId: TrimmedNonEmptyString,
+  credentialName: TrimmedNonEmptyString,
 });
 export type LinearTeam = typeof LinearTeam.Type;
 
@@ -67,6 +69,7 @@ export type LinearIssueSummary = typeof LinearIssueSummary.Type;
 
 export const LinearGetIssueInput = Schema.Struct({
   reference: LinearIssueReference,
+  credentialId: Schema.optional(TrimmedNonEmptyString),
 });
 export type LinearGetIssueInput = typeof LinearGetIssueInput.Type;
 
@@ -96,6 +99,8 @@ export type LinearListProjectIssuesResult = typeof LinearListProjectIssuesResult
 export const LinearImportIssueInput = Schema.Struct({
   projectId: ProjectId,
   reference: LinearIssueReference,
+  credentialId: Schema.optional(TrimmedNonEmptyString),
+  branchPrefix: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(128))),
   mode: LinearWorkflowMode.pipe(Schema.withDecodingDefault(() => "worktree")),
   runtimeMode: RuntimeMode.pipe(Schema.withDecodingDefault(() => "full-access")),
   interactionMode: ProviderInteractionMode.pipe(Schema.withDecodingDefault(() => "default")),

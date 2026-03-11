@@ -4,10 +4,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   linearBindProjectMutationOptions,
   linearImportIssueMutationOptions,
-  linearIssueQueryOptions,
+  linearIssueQueryOptionsWithCredential,
   linearProjectIssuesQueryOptions,
   linearTeamsQueryOptions,
 } from "~/lib/linearReactQuery";
+import { useAppSettings } from "~/appSettings";
 import { serverProjectLinearBindingQueryOptions } from "~/lib/serverReactQuery";
 import { normalizeLinearIssueReference } from "@t3tools/shared/linear";
 import { Badge } from "./ui/badge";
@@ -46,6 +47,10 @@ const EMPTY_LINEAR_ISSUES: ReadonlyArray<{
   readonly updatedAt: string;
 }> = [];
 
+function getLinearTeamSelectionKey(input: { credentialId: string; teamId: string }): string {
+  return `${input.credentialId}:${input.teamId}`;
+}
+
 function formatRelativeUpdatedAt(iso: string): string {
   const diffMs = Date.now() - new Date(iso).getTime();
   const minutes = Math.max(0, Math.floor(diffMs / 60_000));
@@ -71,12 +76,13 @@ export function LinearIssueDialog({
   onImported,
 }: LinearIssueDialogProps) {
   const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
   const manualReferenceInputRef = useRef<HTMLInputElement>(null);
   const [manualReference, setManualReference] = useState(initialReference ?? "");
   const [manualReferenceDirty, setManualReferenceDirty] = useState(false);
   const [issueSearch, setIssueSearch] = useState("");
   const [selectedIssueIdentifier, setSelectedIssueIdentifier] = useState<string | null>(null);
-  const [selectedTeamId, setSelectedTeamId] = useState("");
+  const [selectedTeamSelectionKey, setSelectedTeamSelectionKey] = useState("");
   const [bindingNotice, setBindingNotice] = useState<string | null>(null);
 
   const bindingQuery = useQuery(serverProjectLinearBindingQueryOptions(open ? projectId : null));
@@ -91,6 +97,16 @@ export function LinearIssueDialog({
   });
   const importMutation = useMutation(linearImportIssueMutationOptions({ projectId, queryClient }));
   const bindMutation = useMutation(linearBindProjectMutationOptions({ projectId, queryClient }));
+  const boundTeamSelectionKey = useMemo(
+    () =>
+      binding
+        ? getLinearTeamSelectionKey({
+            credentialId: binding.credentialId,
+            teamId: binding.teamId,
+          })
+        : "",
+    [binding],
+  );
 
   useEffect(() => {
     if (!open) {
@@ -113,19 +129,25 @@ export function LinearIssueDialog({
     if (!open) {
       return;
     }
-    setSelectedTeamId((current) => {
+    setSelectedTeamSelectionKey((current) => {
       if (current.length > 0) {
         return current;
       }
-      return binding?.teamId ?? "";
+      return boundTeamSelectionKey;
     });
-  }, [binding?.teamId, open]);
+  }, [boundTeamSelectionKey, open]);
 
   const teams = teamsQuery.data?.teams ?? [];
   const selectedTeam =
-    teams.find((team) => team.id === selectedTeamId) ??
-    (binding && binding.teamId === selectedTeamId
+    teams.find(
+      (team) =>
+        getLinearTeamSelectionKey({ credentialId: team.credentialId, teamId: team.id }) ===
+        selectedTeamSelectionKey,
+    ) ??
+    (binding && boundTeamSelectionKey === selectedTeamSelectionKey
       ? {
+          credentialId: binding.credentialId,
+          credentialName: binding.credentialName,
           id: binding.teamId,
           key: binding.teamKey,
           name: binding.teamName,
@@ -166,11 +188,18 @@ export function LinearIssueDialog({
 
   const normalizedManualReference = normalizeLinearIssueReference(manualReference);
   const activeReference = normalizedManualReference ?? selectedIssueIdentifier;
-  const issueQuery = useQuery(linearIssueQueryOptions(open ? activeReference : null));
+  const activeCredentialId = selectedTeam?.credentialId ?? binding?.credentialId ?? null;
+  const issueQuery = useQuery(
+    linearIssueQueryOptionsWithCredential({
+      reference: open ? activeReference : null,
+      credentialId: activeCredentialId,
+    }),
+  );
   const liveIssue = issueQuery.data?.issue ?? null;
 
   const isBindingDirty =
-    selectedTeamId !== (binding?.teamId ?? "") && (selectedTeamId.length > 0 || binding !== null);
+    selectedTeamSelectionKey !== boundTeamSelectionKey &&
+    (selectedTeamSelectionKey.length > 0 || binding !== null);
   const validationMessage =
     manualReferenceDirty && manualReference.trim().length > 0 && normalizedManualReference === null
       ? "Use a Linear issue URL or identifier like ABC-123."
@@ -227,7 +256,7 @@ export function LinearIssueDialog({
               </div>
               {binding ? (
                 <Badge variant="outline" className="shrink-0">
-                  {binding.teamKey}
+                  {binding.credentialName} · {binding.teamKey}
                 </Badge>
               ) : null}
             </div>
@@ -236,8 +265,8 @@ export function LinearIssueDialog({
               <label className="grid gap-1.5">
                 <span className="text-xs font-medium text-foreground">Linear workspace</span>
                 <Select
-                  value={selectedTeamId}
-                  onValueChange={(value) => setSelectedTeamId(value ?? "")}
+                  value={selectedTeamSelectionKey}
+                  onValueChange={(value) => setSelectedTeamSelectionKey(value ?? "")}
                 >
                   <SelectTrigger size="sm">
                     <SelectValue
@@ -248,8 +277,14 @@ export function LinearIssueDialog({
                   </SelectTrigger>
                   <SelectContent>
                     {teams.map((team) => (
-                      <SelectItem key={team.id} value={team.id}>
-                        {team.key} · {team.name}
+                      <SelectItem
+                        key={`${team.credentialId}:${team.id}`}
+                        value={getLinearTeamSelectionKey({
+                          credentialId: team.credentialId,
+                          teamId: team.id,
+                        })}
+                      >
+                        {team.credentialName} · {team.key} · {team.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -266,13 +301,15 @@ export function LinearIssueDialog({
                     return;
                   }
                   const result = await bindMutation.mutateAsync({
+                    credentialId: selectedTeam.credentialId,
+                    credentialName: selectedTeam.credentialName,
                     teamId: selectedTeam.id,
                     teamKey: selectedTeam.key,
                     teamName: selectedTeam.name,
                   });
                   setBindingNotice(
                     result
-                      ? `Bound this project to ${result.teamKey} · ${result.teamName}.`
+                      ? `Bound this project to ${result.credentialName} · ${result.teamKey} · ${result.teamName}.`
                       : "Cleared the Linear workspace binding.",
                   );
                 }}
@@ -291,11 +328,13 @@ export function LinearIssueDialog({
                 disabled={!projectId || binding === null || bindMutation.isPending}
                 onClick={async () => {
                   await bindMutation.mutateAsync({
+                    credentialId: null,
+                    credentialName: null,
                     teamId: null,
                     teamKey: null,
                     teamName: null,
                   });
-                  setSelectedTeamId("");
+                  setSelectedTeamSelectionKey("");
                   setSelectedIssueIdentifier(null);
                   setBindingNotice("Cleared the Linear workspace binding.");
                 }}
@@ -306,7 +345,7 @@ export function LinearIssueDialog({
 
             {binding ? (
               <p className="text-muted-foreground text-xs">
-                Current binding: {binding.teamKey} · {binding.teamName}
+                Current binding: {binding.credentialName} · {binding.teamKey} · {binding.teamName}
               </p>
             ) : null}
             {bindingNotice ? (
@@ -320,7 +359,7 @@ export function LinearIssueDialog({
                 <p className="font-medium text-sm">Workspace Issues</p>
                 <p className="text-muted-foreground text-xs">
                   {binding
-                    ? `Showing recent issues from ${binding.teamKey} · ${binding.teamName}.`
+                    ? `Showing recent issues from ${binding.credentialName} · ${binding.teamKey} · ${binding.teamName}.`
                     : "Bind a workspace to browse recent issues for this project."}
                 </p>
               </div>
@@ -422,10 +461,16 @@ export function LinearIssueDialog({
                     if (!canImport || !activeReference) {
                       return;
                     }
-                    void importMutation.mutateAsync(activeReference).then((result) => {
-                      onImported(result.threadId);
-                      onOpenChange(false);
-                    });
+                    void importMutation
+                      .mutateAsync({
+                        reference: activeReference,
+                        credentialId: activeCredentialId,
+                        branchPrefix: settings.pullRequestWorktreeBranchPrefix,
+                      })
+                      .then((result) => {
+                        onImported(result.threadId);
+                        onOpenChange(false);
+                      });
                   }}
                 />
               </label>
@@ -495,7 +540,11 @@ export function LinearIssueDialog({
                 setManualReferenceDirty(true);
                 return;
               }
-              const result = await importMutation.mutateAsync(activeReference);
+              const result = await importMutation.mutateAsync({
+                reference: activeReference,
+                credentialId: activeCredentialId,
+                branchPrefix: settings.pullRequestWorktreeBranchPrefix,
+              });
               onImported(result.threadId);
               onOpenChange(false);
             }}

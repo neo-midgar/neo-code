@@ -67,19 +67,37 @@ export type ServerUpsertKeybindingResult = typeof ServerUpsertKeybindingResult.T
 export const ServerLinearCredentialSource = Schema.Literals(["env", "saved", "none"]);
 export type ServerLinearCredentialSource = typeof ServerLinearCredentialSource.Type;
 
+export const ServerLinearCredential = Schema.Struct({
+  id: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  source: Schema.Literals(["env", "saved"]),
+  updatedAt: Schema.NullOr(IsoDateTime),
+});
+export type ServerLinearCredential = typeof ServerLinearCredential.Type;
+
 export const ServerLinearConfig = Schema.Struct({
   configured: Schema.Boolean,
   source: ServerLinearCredentialSource,
+  credentials: Schema.Array(ServerLinearCredential),
 });
 export type ServerLinearConfig = typeof ServerLinearConfig.Type;
 
-export const ServerSetLinearApiKeyInput = Schema.Struct({
-  apiKey: Schema.NullOr(Schema.String.check(Schema.isMaxLength(4096))),
+export const ServerUpsertLinearCredentialInput = Schema.Struct({
+  credentialId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  name: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+  apiKey: Schema.String.check(Schema.isMaxLength(4096)),
 });
-export type ServerSetLinearApiKeyInput = typeof ServerSetLinearApiKeyInput.Type;
+export type ServerUpsertLinearCredentialInput = typeof ServerUpsertLinearCredentialInput.Type;
+
+export const ServerDeleteLinearCredentialInput = Schema.Struct({
+  credentialId: TrimmedNonEmptyString,
+});
+export type ServerDeleteLinearCredentialInput = typeof ServerDeleteLinearCredentialInput.Type;
 
 export const ServerLinearProjectBinding = Schema.Struct({
   projectId: ProjectId,
+  credentialId: TrimmedNonEmptyString,
+  credentialName: TrimmedNonEmptyString,
   teamId: TrimmedNonEmptyString,
   teamKey: TrimmedNonEmptyString,
   teamName: TrimmedNonEmptyString,
@@ -94,11 +112,18 @@ export type ServerGetProjectLinearBindingInput = typeof ServerGetProjectLinearBi
 
 export const ServerSetProjectLinearBindingInput = Schema.Struct({
   projectId: ProjectId,
+  credentialId: Schema.NullOr(TrimmedNonEmptyString),
+  credentialName: Schema.NullOr(TrimmedNonEmptyString),
   teamId: Schema.NullOr(TrimmedNonEmptyString),
   teamKey: Schema.NullOr(TrimmedNonEmptyString),
   teamName: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type ServerSetProjectLinearBindingInput = typeof ServerSetProjectLinearBindingInput.Type;
+
+export const ServerGetLinearProjectBindingsResult = Schema.Struct({
+  bindings: Schema.Array(ServerLinearProjectBinding),
+});
+export type ServerGetLinearProjectBindingsResult = typeof ServerGetLinearProjectBindingsResult.Type;
 
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,

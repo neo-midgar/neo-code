@@ -70,20 +70,49 @@ export function linearIssueQueryOptions(reference: string | null) {
   });
 }
 
+export function linearIssueQueryOptionsWithCredential(input: {
+  reference: string | null;
+  credentialId?: string | null;
+}) {
+  return queryOptions({
+    queryKey: ["linear", "issue", input.reference, input.credentialId ?? null] as const,
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      if (!input.reference) {
+        throw new Error("Linear issue lookup is unavailable.");
+      }
+      return api.linear.getIssue({
+        reference: input.reference,
+        ...(input.credentialId ? { credentialId: input.credentialId } : {}),
+      });
+    },
+    enabled: input.reference !== null,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  });
+}
+
 export function linearImportIssueMutationOptions(input: {
   projectId: string | null;
   queryClient: QueryClient;
 }) {
   return mutationOptions({
     mutationKey: linearMutationKeys.importIssue(input.projectId),
-    mutationFn: async (reference: string) => {
+    mutationFn: async (payload: {
+      reference: string;
+      credentialId?: string | null;
+      branchPrefix?: string | null;
+    }) => {
       const api = ensureNativeApi();
       if (!input.projectId) {
         throw new Error("Linear issue import is unavailable.");
       }
       return api.linear.importIssue({
         projectId: ProjectId.makeUnsafe(input.projectId),
-        reference,
+        reference: payload.reference,
+        ...(payload.credentialId ? { credentialId: payload.credentialId } : {}),
+        ...(payload.branchPrefix ? { branchPrefix: payload.branchPrefix } : {}),
         mode: "worktree",
         runtimeMode: "full-access",
         interactionMode: "default",
@@ -102,6 +131,8 @@ export function linearBindProjectMutationOptions(input: {
   return mutationOptions({
     mutationKey: linearMutationKeys.bindProject(input.projectId),
     mutationFn: async (payload: {
+      credentialId: string | null;
+      credentialName: string | null;
       teamId: string | null;
       teamKey: string | null;
       teamName: string | null;
@@ -112,6 +143,8 @@ export function linearBindProjectMutationOptions(input: {
       }
       return api.server.setProjectLinearBinding({
         projectId: ProjectId.makeUnsafe(input.projectId),
+        credentialId: payload.credentialId,
+        credentialName: payload.credentialName,
         teamId: payload.teamId,
         teamKey: payload.teamKey,
         teamName: payload.teamName,
@@ -120,6 +153,8 @@ export function linearBindProjectMutationOptions(input: {
     onSettled: async () => {
       await Promise.all([
         input.queryClient.invalidateQueries({ queryKey: linearQueryKeys.all }),
+        input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearConfig() }),
+        input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.linearProjectBindings() }),
         input.queryClient.invalidateQueries({
           queryKey: serverQueryKeys.projectLinearBinding(input.projectId),
         }),
