@@ -135,7 +135,7 @@ export interface GitHubCliShape {
   }) => Effect.Effect<string | null, GitHubCliError>;
 
   /**
-   * List code review findings left on a pull request.
+   * List unresolved code review findings left on a pull request.
    */
   readonly listPullRequestReviewFindings: (input: {
     readonly cwd: string;

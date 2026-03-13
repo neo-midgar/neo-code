@@ -139,6 +139,7 @@ export function PullRequestObserverCard({
   onFixFinding,
   onCleanupThread,
 }: PullRequestObserverCardProps) {
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [expandedFindingIds, setExpandedFindingIds] = useState<Record<string, boolean>>({});
   const gitStatusQuery = useQuery(gitStatusQueryOptions(gitCwd));
   const trackedPr = gitStatusQuery.data?.pr ?? null;
@@ -204,12 +205,33 @@ export function PullRequestObserverCard({
               Watching checks
             </span>
           ) : null}
+          <Button
+            type="button"
+            size="xs"
+            variant="ghost"
+            className={
+              trackedPr.state !== "open" && canCleanupThread && onCleanupThread ? "" : "ml-auto"
+            }
+            onClick={() => setDetailsExpanded((current) => !current)}
+          >
+            {detailsExpanded ? (
+              <>
+                <ChevronUpIcon className="size-3" />
+                Collapse
+              </>
+            ) : (
+              <>
+                <ChevronDownIcon className="size-3" />
+                Expand
+              </>
+            )}
+          </Button>
           {trackedPr.state !== "open" && canCleanupThread && onCleanupThread ? (
             <Button
               type="button"
               size="xs"
               variant="outline"
-              className="ml-auto gap-1.5"
+              className="gap-1.5"
               onClick={onCleanupThread}
             >
               <Trash2Icon className="size-3" />
@@ -249,7 +271,7 @@ export function PullRequestObserverCard({
               </Badge>
             </div>
 
-            {observation.checks.length > 0 ? (
+            {detailsExpanded && observation.checks.length > 0 ? (
               <div className="flex max-h-36 flex-col gap-1 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
                 {observation.checks.map((check) =>
                   (() => {
@@ -286,7 +308,7 @@ export function PullRequestObserverCard({
               </div>
             ) : null}
 
-            {visibleFindings.length > 0 ? (
+            {detailsExpanded && visibleFindings.length > 0 ? (
               <div className="flex max-h-72 flex-col gap-2 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
                 {visibleFindings.map((finding) => {
                   const findingAdvice = isBotFinding(finding)
@@ -373,6 +395,15 @@ export function PullRequestObserverCard({
                     </div>
                   );
                 })}
+              </div>
+            ) : null}
+
+            {detailsExpanded &&
+            observation.checks.length === 0 &&
+            visibleFindings.length === 0 &&
+            !errorMessage ? (
+              <div className="rounded-lg border border-dashed border-border/60 bg-muted/10 px-3 py-3 text-muted-foreground text-xs">
+                No active checks or unresolved review findings.
               </div>
             ) : null}
           </>

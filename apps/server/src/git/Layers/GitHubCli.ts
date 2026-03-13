@@ -141,16 +141,13 @@ const RawGitHubPullRequestReviewDecisionSchema = Schema.Struct({
   reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
-const RawGitHubPullRequestReviewFindingSchema = Schema.Struct({
-  id: PositiveInt,
+const RawGitHubPullRequestReviewThreadCommentSchema = Schema.Struct({
+  id: Schema.String,
   body: Schema.String,
-  path: TrimmedNonEmptyString,
-  line: Schema.optional(Schema.NullOr(PositiveInt)),
-  html_url: TrimmedNonEmptyString,
-  created_at: TrimmedNonEmptyString,
-  updated_at: TrimmedNonEmptyString,
-  in_reply_to_id: Schema.optional(Schema.NullOr(PositiveInt)),
-  user: Schema.optional(
+  url: TrimmedNonEmptyString,
+  createdAt: TrimmedNonEmptyString,
+  updatedAt: TrimmedNonEmptyString,
+  author: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
         login: TrimmedNonEmptyString,
@@ -158,6 +155,70 @@ const RawGitHubPullRequestReviewFindingSchema = Schema.Struct({
     ),
   ),
 });
+
+const RawGitHubPullRequestReviewThreadSchema = Schema.Struct({
+  id: Schema.String,
+  isResolved: Schema.Boolean,
+  path: TrimmedNonEmptyString,
+  line: Schema.optional(Schema.NullOr(PositiveInt)),
+  originalLine: Schema.optional(Schema.NullOr(PositiveInt)),
+  comments: Schema.Struct({
+    nodes: Schema.Array(Schema.NullOr(RawGitHubPullRequestReviewThreadCommentSchema)),
+  }),
+});
+
+const RawGitHubPullRequestReviewThreadsGraphqlSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.NullOr(
+      Schema.Struct({
+        pullRequest: Schema.NullOr(
+          Schema.Struct({
+            reviewThreads: Schema.Struct({
+              nodes: Schema.Array(Schema.NullOr(RawGitHubPullRequestReviewThreadSchema)),
+            }),
+          }),
+        ),
+      }),
+    ),
+  }),
+  errors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        message: Schema.String,
+      }),
+    ),
+  ),
+});
+
+const PULL_REQUEST_REVIEW_THREADS_QUERY = `
+query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100) {
+        nodes {
+          id
+          isResolved
+          path
+          line
+          originalLine
+          comments(first: 20) {
+            nodes {
+              id
+              body
+              url
+              createdAt
+              updatedAt
+              author {
+                login
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+`.trim();
 
 function normalizePullRequestSummary(
   raw: Schema.Schema.Type<typeof RawGitHubPullRequestSchema>,
@@ -210,31 +271,55 @@ function normalizePullRequestCheck(
   };
 }
 
-function normalizePullRequestReviewFinding(
-  raw: Schema.Schema.Type<typeof RawGitHubPullRequestReviewFindingSchema>,
+function splitRepositoryNameWithOwner(value: string): {
+  owner: string;
+  name: string;
+} | null {
+  const [owner, name] = value.trim().split("/");
+  const normalizedOwner = owner?.trim() ?? "";
+  const normalizedName = name?.trim() ?? "";
+  if (normalizedOwner.length === 0 || normalizedName.length === 0) {
+    return null;
+  }
+  return {
+    owner: normalizedOwner,
+    name: normalizedName,
+  };
+}
+
+function normalizePullRequestReviewFindingFromThread(
+  raw: Schema.Schema.Type<typeof RawGitHubPullRequestReviewThreadSchema>,
 ): GitHubPullRequestReviewFinding | null {
-  if (raw.in_reply_to_id !== undefined && raw.in_reply_to_id !== null) {
-    return null;
-  }
-  const authorLogin = raw.user?.login?.trim() ?? "";
-  if (authorLogin.length === 0) {
-    return null;
-  }
-  const body = raw.body.trim();
-  if (body.length === 0) {
+  if (raw.isResolved) {
     return null;
   }
 
+  const comments = raw.comments.nodes.filter(
+    (comment): comment is NonNullable<typeof comment> => comment !== null,
+  );
+  const rootComment = comments.find((comment) => {
+    const authorLogin = comment.author?.login?.trim() ?? "";
+    return authorLogin.length > 0 && comment.body.trim().length > 0;
+  });
+  if (!rootComment) {
+    return null;
+  }
+
+  const latestUpdatedAt =
+    comments
+      .map((comment) => comment.updatedAt)
+      .toSorted((left, right) => Date.parse(right) - Date.parse(left))[0] ?? rootComment.updatedAt;
+
   return {
-    id: String(raw.id),
-    authorLogin,
+    id: raw.id,
+    authorLogin: rootComment.author?.login ?? "unknown",
     authorName: null,
-    body,
+    body: rootComment.body.trim(),
     path: raw.path,
-    line: raw.line ?? null,
-    url: raw.html_url,
-    createdAt: raw.created_at,
-    updatedAt: raw.updated_at,
+    line: raw.line ?? raw.originalLine ?? null,
+    url: rootComment.url,
+    createdAt: rootComment.createdAt,
+    updatedAt: latestUpdatedAt,
   };
 }
 
@@ -420,29 +505,60 @@ const makeGitHubCli = Effect.sync(() => {
         }),
       ),
     listPullRequestReviewFindings: (input) =>
-      execute({
-        cwd: input.cwd,
-        args: [
-          "api",
-          `repos/${input.repository}/pulls/${input.number}/comments?per_page=${String(
-            input.limit ?? 100,
-          )}`,
-        ],
+      Effect.gen(function* () {
+        const repository = splitRepositoryNameWithOwner(input.repository);
+        if (!repository) {
+          return yield* Effect.fail(
+            new GitHubCliError({
+              operation: "listPullRequestReviewFindings",
+              detail: `Invalid GitHub repository name: ${input.repository}`,
+            }),
+          );
+        }
+
+        const raw = yield* execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            "graphql",
+            "-F",
+            `owner=${repository.owner}`,
+            "-F",
+            `name=${repository.name}`,
+            "-F",
+            `number=${String(input.number)}`,
+            "-f",
+            `query=${PULL_REQUEST_REVIEW_THREADS_QUERY}`,
+          ],
+        }).pipe(Effect.map((result) => result.stdout.trim()));
+
+        return raw;
       }).pipe(
-        Effect.map((result) => result.stdout.trim()),
         Effect.flatMap((raw) =>
-          raw.length === 0
-            ? Effect.succeed([])
-            : decodeGitHubJson(
-                raw,
-                Schema.Array(RawGitHubPullRequestReviewFindingSchema),
-                "listPullRequestReviewFindings",
-                "GitHub CLI returned invalid pull request review comment JSON.",
-              ),
+          decodeGitHubJson(
+            raw,
+            RawGitHubPullRequestReviewThreadsGraphqlSchema,
+            "listPullRequestReviewFindings",
+            "GitHub CLI returned invalid pull request review thread JSON.",
+          ),
         ),
-        Effect.map((findings) =>
-          findings
-            .map(normalizePullRequestReviewFinding)
+        Effect.flatMap((payload) => {
+          const payloadErrors = payload.errors ?? [];
+          if (payloadErrors.length > 0) {
+            return Effect.fail(
+              new GitHubCliError({
+                operation: "listPullRequestReviewFindings",
+                detail: payloadErrors.map((error) => error.message).join("; "),
+              }),
+            );
+          }
+          return Effect.succeed(payload);
+        }),
+        Effect.map((payload) => payload.data.repository?.pullRequest?.reviewThreads.nodes ?? []),
+        Effect.map((threads) =>
+          threads
+            .filter((thread): thread is NonNullable<typeof thread> => thread !== null)
+            .map(normalizePullRequestReviewFindingFromThread)
             .filter((finding): finding is GitHubPullRequestReviewFinding => finding !== null)
             .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt)),
         ),

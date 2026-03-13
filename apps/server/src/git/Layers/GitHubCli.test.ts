@@ -145,4 +145,102 @@ layer("GitHubCliLive", (it) => {
       assert.deepStrictEqual(result, []);
     }),
   );
+
+  it.effect("returns only unresolved review threads as findings", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: {
+                  nodes: [
+                    {
+                      id: "PRRT_unresolved",
+                      isResolved: false,
+                      path: "apps/web/src/App.tsx",
+                      line: 44,
+                      originalLine: 44,
+                      comments: {
+                        nodes: [
+                          {
+                            id: "PRRC_root",
+                            body: "Please simplify this branch.",
+                            url: "https://github.com/pingdotgg/codething-mvp/pull/42#discussion_r1",
+                            createdAt: "2026-03-10T12:00:00Z",
+                            updatedAt: "2026-03-10T12:05:00Z",
+                            author: {
+                              login: "coderabbitai",
+                            },
+                          },
+                          {
+                            id: "PRRC_reply",
+                            body: "Still needs work.",
+                            url: "https://github.com/pingdotgg/codething-mvp/pull/42#discussion_r2",
+                            createdAt: "2026-03-10T12:06:00Z",
+                            updatedAt: "2026-03-10T12:10:00Z",
+                            author: {
+                              login: "reviewer",
+                            },
+                          },
+                        ],
+                      },
+                    },
+                    {
+                      id: "PRRT_resolved",
+                      isResolved: true,
+                      path: "apps/web/src/Old.tsx",
+                      line: 12,
+                      originalLine: 12,
+                      comments: {
+                        nodes: [
+                          {
+                            id: "PRRC_resolved",
+                            body: "Already fixed.",
+                            url: "https://github.com/pingdotgg/codething-mvp/pull/42#discussion_r3",
+                            createdAt: "2026-03-10T11:00:00Z",
+                            updatedAt: "2026-03-10T11:02:00Z",
+                            author: {
+                              login: "reviewer",
+                            },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        timedOut: false,
+      });
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listPullRequestReviewFindings({
+          cwd: "/repo",
+          repository: "pingdotgg/codething-mvp",
+          number: 42,
+        });
+      });
+
+      assert.deepStrictEqual(result, [
+        {
+          id: "PRRT_unresolved",
+          authorLogin: "coderabbitai",
+          authorName: null,
+          body: "Please simplify this branch.",
+          path: "apps/web/src/App.tsx",
+          line: 44,
+          url: "https://github.com/pingdotgg/codething-mvp/pull/42#discussion_r1",
+          createdAt: "2026-03-10T12:00:00Z",
+          updatedAt: "2026-03-10T12:10:00Z",
+        },
+      ]);
+    }),
+  );
 });
