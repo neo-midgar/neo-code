@@ -55,7 +55,12 @@ import {
   type VirtualItem,
   useVirtualizer,
 } from "@tanstack/react-virtual";
-import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
+import {
+  gitBranchesQueryOptions,
+  gitCreateWorktreeMutationOptions,
+  gitDeleteBranchMutationOptions,
+  gitRemoveWorktreeMutationOptions,
+} from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 
@@ -230,6 +235,7 @@ import { LinearReportDialog } from "./LinearReportDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { PullRequestObserverCard } from "./PullRequestObserverCard";
 import { estimateTimelineMessageHeight } from "./timelineHeight";
+import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 
 function formatMessageMeta(createdAt: string, duration: string | null): string {
   if (!duration) return formatTimestamp(createdAt);
@@ -602,6 +608,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
+  const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const deleteBranchMutation = useMutation(gitDeleteBranchMutationOptions({ queryClient }));
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
@@ -634,6 +642,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const clearProjectDraftThreadId = useComposerDraftStore(
     (store) => store.clearProjectDraftThreadId,
   );
+  const clearProjectDraftThreadById = useComposerDraftStore(
+    (store) => store.clearProjectDraftThreadById,
+  );
+  const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
   const draftThread = useComposerDraftStore(
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
@@ -723,6 +735,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const storeNewTerminal = useTerminalStateStore((s) => s.newTerminal);
   const storeSetActiveTerminal = useTerminalStateStore((s) => s.setActiveTerminal);
   const storeCloseTerminal = useTerminalStateStore((s) => s.closeTerminal);
+  const clearTerminalState = useTerminalStateStore((s) => s.clearTerminalState);
 
   const setPrompt = useCallback(
     (nextPrompt: string) => {
@@ -777,6 +790,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProject = projects.find((p) => p.id === activeThread?.projectId);
+  const orphanedWorktreePathForActiveThread = useMemo(
+    () => (activeThread ? getOrphanedWorktreePathForThread(threads, activeThread.id) : null),
+    [activeThread, threads],
+  );
+  const canCleanupClosedPullRequestThread =
+    activeThread != null &&
+    activeProject !== undefined &&
+    orphanedWorktreePathForActiveThread !== null &&
+    typeof activeThread.branch === "string" &&
+    activeThread.branch.trim().length > 0;
 
   const openPullRequestDialog = useCallback(
     (reference?: string) => {
@@ -3148,6 +3171,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const onFixPullRequestFinding = useCallback(
     async (input: {
       finding: GitPullRequestReviewFinding;
+      findingAdvice: string | null;
       observation: GitObservePullRequestResult;
     }) => {
       const location = input.finding.line
@@ -3157,7 +3181,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
         `Address this pull request review finding on PR #${input.observation.pullRequest.number}: ${input.observation.pullRequest.title}`,
         `Reviewer: ${input.finding.authorLogin}`,
         `Location: ${location}`,
-        `Comment:\n${input.finding.body}`,
+        ...(input.findingAdvice ? [`Suggested fix:\n${input.findingAdvice}`] : []),
+        `Original comment:\n${input.finding.body}`,
         "Task:",
         "Inspect the current branch/worktree, implement the fix if the feedback is valid, and summarize the change clearly.",
         "If you disagree with the finding, explain why before making any code changes.",
@@ -3170,6 +3195,118 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [startTextOnlyTurn],
   );
+
+  const onCleanupClosedPullRequestThread = useCallback(async () => {
+    const api = readNativeApi();
+    if (
+      !api ||
+      !activeThread ||
+      !activeProject ||
+      !orphanedWorktreePathForActiveThread ||
+      !activeThread.branch
+    ) {
+      return;
+    }
+
+    const confirmed = await api.dialogs.confirm(
+      [
+        `Delete the local issue workspace for "${activeThread.title}"?`,
+        "",
+        `Thread: ${activeThread.title}`,
+        `Worktree: ${formatWorktreePathForDisplay(orphanedWorktreePathForActiveThread)}`,
+        `Branch: ${activeThread.branch}`,
+        "",
+        "This deletes the chat thread, removes the local worktree, and deletes the local branch.",
+      ].join("\n"),
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    if (activeThread.session && activeThread.session.status !== "closed") {
+      await api.orchestration
+        .dispatchCommand({
+          type: "thread.session.stop",
+          commandId: newCommandId(),
+          threadId: activeThread.id,
+          createdAt: new Date().toISOString(),
+        })
+        .catch(() => undefined);
+    }
+
+    await api.terminal
+      .close({ threadId: activeThread.id, deleteHistory: true })
+      .catch(() => undefined);
+
+    const fallbackThreadId = threads.find((thread) => thread.id !== activeThread.id)?.id ?? null;
+
+    await api.orchestration.dispatchCommand({
+      type: "thread.delete",
+      commandId: newCommandId(),
+      threadId: activeThread.id,
+    });
+    clearComposerDraftForThread(activeThread.id);
+    clearProjectDraftThreadById(activeThread.projectId, activeThread.id);
+    clearTerminalState(activeThread.id);
+
+    if (fallbackThreadId) {
+      void navigate({
+        to: "/$threadId",
+        params: { threadId: fallbackThreadId },
+        replace: true,
+      });
+    } else {
+      void navigate({ to: "/", replace: true });
+    }
+
+    try {
+      await removeWorktreeMutation.mutateAsync({
+        cwd: activeProject.cwd,
+        path: orphanedWorktreePathForActiveThread,
+        force: true,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Thread deleted, but worktree removal failed",
+        description:
+          error instanceof Error ? error.message : "Could not remove the local worktree.",
+      });
+      return;
+    }
+
+    try {
+      await deleteBranchMutation.mutateAsync({
+        cwd: activeProject.cwd,
+        branch: activeThread.branch,
+        force: true,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Worktree removed, but branch deletion failed",
+        description: error instanceof Error ? error.message : "Could not delete the local branch.",
+      });
+      return;
+    }
+
+    toastManager.add({
+      type: "success",
+      title: "Local issue workspace deleted",
+      description: `Removed ${formatWorktreePathForDisplay(orphanedWorktreePathForActiveThread)} and deleted ${activeThread.branch}.`,
+    });
+  }, [
+    activeProject,
+    activeThread,
+    clearComposerDraftForThread,
+    clearProjectDraftThreadById,
+    clearTerminalState,
+    deleteBranchMutation,
+    navigate,
+    orphanedWorktreePathForActiveThread,
+    removeWorktreeMutation,
+    threads,
+  ]);
 
   const onImplementPlanInNewThread = useCallback(async () => {
     const api = readNativeApi();
@@ -3673,6 +3810,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       />
       <PullRequestObserverCard
         gitCwd={gitCwd}
+        canCleanupThread={canCleanupClosedPullRequestThread}
         onOpenUrl={(url) => {
           const api = readNativeApi();
           if (!api) {
@@ -3681,6 +3819,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           void api.shell.openExternal(url);
         }}
         onFixFinding={onFixPullRequestFinding}
+        onCleanupThread={onCleanupClosedPullRequestThread}
       />
 
       {/* Error banner */}

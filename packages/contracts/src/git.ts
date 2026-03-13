@@ -117,6 +117,13 @@ export const GitCreateBranchInput = Schema.Struct({
 });
 export type GitCreateBranchInput = typeof GitCreateBranchInput.Type;
 
+export const GitDeleteBranchInput = Schema.Struct({
+  cwd: TrimmedNonEmptyStringSchema,
+  branch: TrimmedNonEmptyStringSchema,
+  force: Schema.optional(Schema.Boolean),
+});
+export type GitDeleteBranchInput = typeof GitDeleteBranchInput.Type;
+
 export const GitCheckoutInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   branch: TrimmedNonEmptyStringSchema,

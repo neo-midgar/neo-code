@@ -125,4 +125,24 @@ layer("GitHubCliLive", (it) => {
       assert.equal(error.message.includes("Pull request not found"), true);
     }),
   );
+
+  it.effect("returns an empty check list when GitHub reports no checks for the branch", () =>
+    Effect.gen(function* () {
+      mockedRunProcess.mockRejectedValueOnce(
+        new Error(
+          "gh pr checks https://github.com/pingdotgg/codething-mvp/pull/42 --json bucket,completedAt,description,event,link,name,startedAt,state,workflow failed (code=1, signal=null). no checks reported on the 'main' branch",
+        ),
+      );
+
+      const result = yield* Effect.gen(function* () {
+        const gh = yield* GitHubCli;
+        return yield* gh.listPullRequestChecks({
+          cwd: "/repo",
+          reference: "https://github.com/pingdotgg/codething-mvp/pull/42",
+        });
+      });
+
+      assert.deepStrictEqual(result, []);
+    }),
+  );
 });

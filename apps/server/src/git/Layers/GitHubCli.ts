@@ -65,6 +65,12 @@ function normalizeGitHubCliError(operation: "execute" | "stdout", error: unknown
   });
 }
 
+function isNoChecksReportedError(error: GitHubCliError): boolean {
+  const causeMessage = error.cause instanceof Error ? error.cause.message : "";
+  const combined = `${error.detail}\n${causeMessage}`.toLowerCase();
+  return combined.includes("no checks reported on the");
+}
+
 function normalizePullRequestState(input: {
   state?: string | null | undefined;
   mergedAt?: string | null | undefined;
@@ -379,6 +385,9 @@ const makeGitHubCli = Effect.sync(() => {
         ],
       }).pipe(
         Effect.map((result) => result.stdout.trim()),
+        Effect.catch((error) =>
+          isNoChecksReportedError(error) ? Effect.succeed("") : Effect.fail(error),
+        ),
         Effect.flatMap((raw) =>
           raw.length === 0
             ? Effect.succeed([])

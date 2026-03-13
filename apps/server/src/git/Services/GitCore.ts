@@ -13,6 +13,7 @@ import type {
   GitCreateBranchInput,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
+  GitDeleteBranchInput,
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
@@ -197,6 +198,11 @@ export interface GitCoreShape {
    * Create a local branch.
    */
   readonly createBranch: (input: GitCreateBranchInput) => Effect.Effect<void, GitCommandError>;
+
+  /**
+   * Delete a local branch.
+   */
+  readonly deleteBranch: (input: GitDeleteBranchInput) => Effect.Effect<void, GitCommandError>;
 
   /**
    * Checkout an existing branch and refresh its upstream metadata in background.

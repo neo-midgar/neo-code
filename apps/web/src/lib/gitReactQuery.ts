@@ -217,6 +217,28 @@ export function gitRemoveWorktreeMutationOptions(input: { queryClient: QueryClie
   });
 }
 
+export function gitDeleteBranchMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationFn: async ({
+      cwd,
+      branch,
+      force,
+    }: {
+      cwd: string;
+      branch: string;
+      force?: boolean;
+    }) => {
+      const api = ensureNativeApi();
+      if (!cwd) throw new Error("Git branch deletion is unavailable.");
+      return api.git.deleteBranch({ cwd, branch, force });
+    },
+    mutationKey: ["git", "mutation", "delete-branch"] as const,
+    onSettled: async () => {
+      await invalidateGitQueries(input.queryClient);
+    },
+  });
+}
+
 export function gitPreparePullRequestThreadMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;

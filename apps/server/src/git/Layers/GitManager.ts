@@ -271,6 +271,15 @@ function appendUnique(values: string[], next: string | null | undefined): void {
   values.push(trimmed);
 }
 
+function isDefaultBranchName(branch: string, defaultBranch: string | null): boolean {
+  const normalizedBranch = branch.trim();
+  const normalizedDefaultBranch = defaultBranch?.trim() ?? "";
+  if (normalizedDefaultBranch.length > 0) {
+    return normalizedBranch === normalizedDefaultBranch;
+  }
+  return normalizedBranch === "main" || normalizedBranch === "master";
+}
+
 function toStatusPr(pr: PullRequestInfo): {
   number: number;
   title: string;
@@ -567,6 +576,9 @@ export const makeGitManager = Effect.gen(function* () {
     Effect.gen(function* () {
       const headContext = yield* resolveBranchHeadContext(cwd, details);
       const parsedByNumber = new Map<number, PullRequestInfo>();
+      const defaultBranch = yield* gitHubCli
+        .getDefaultBranch({ cwd })
+        .pipe(Effect.catch(() => Effect.succeed(null)));
 
       for (const headSelector of headContext.headSelectors) {
         const stdout = yield* gitHubCli
@@ -612,6 +624,9 @@ export const makeGitManager = Effect.gen(function* () {
       const latestOpenPr = parsed.find((pr) => pr.state === "open");
       if (latestOpenPr) {
         return latestOpenPr;
+      }
+      if (isDefaultBranchName(details.branch, defaultBranch)) {
+        return null;
       }
       return parsed[0] ?? null;
     });

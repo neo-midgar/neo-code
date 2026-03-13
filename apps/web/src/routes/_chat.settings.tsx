@@ -8,6 +8,11 @@ import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import {
+  getNotificationPermission,
+  requestNotificationPermission,
+  type NotificationSupportState,
+} from "../lib/notifications";
+import {
   serverConfigQueryOptions,
   serverLinearConfigQueryOptions,
   serverQueryKeys,
@@ -87,6 +92,9 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 function SettingsRouteView() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings } = useAppSettings();
+  const [notificationPermission, setNotificationPermission] = useState<NotificationSupportState>(
+    () => getNotificationPermission(),
+  );
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const serverLinearConfigQuery = useQuery(serverLinearConfigQueryOptions());
@@ -239,6 +247,24 @@ function SettingsRouteView() {
       }));
     },
     [settings, updateSettings],
+  );
+
+  const handleCompletionNotificationsChange = useCallback(
+    (checked: boolean) => {
+      updateSettings({
+        enableCompletionNotifications: Boolean(checked),
+      });
+
+      if (!checked) {
+        setNotificationPermission(getNotificationPermission());
+        return;
+      }
+
+      void requestNotificationPermission().then((permission) => {
+        setNotificationPermission(permission);
+      });
+    },
+    [updateSettings],
   );
 
   return (
@@ -520,6 +546,64 @@ function SettingsRouteView() {
 
                 {linearCredentialMessage ? (
                   <p className="text-xs text-muted-foreground">{linearCredentialMessage}</p>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Notifications</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Alert you when a thread finishes work, even if the window is in the background.
+                </p>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Completion notifications</p>
+                    <p className="text-xs text-muted-foreground">
+                      Show a toast when work finishes and use a system notification while the app is
+                      not focused.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.enableCompletionNotifications}
+                    onCheckedChange={(checked) =>
+                      handleCompletionNotificationsChange(Boolean(checked))
+                    }
+                    aria-label="Enable completion notifications"
+                  />
+                </div>
+
+                <div className="rounded-lg border border-border/70 bg-background px-3 py-2 text-xs text-muted-foreground">
+                  System notification permission:{" "}
+                  <span className="font-medium text-foreground">
+                    {notificationPermission === "granted"
+                      ? "Allowed"
+                      : notificationPermission === "denied"
+                        ? "Blocked"
+                        : notificationPermission === "default"
+                          ? "Not decided"
+                          : "Unavailable"}
+                  </span>
+                </div>
+
+                {settings.enableCompletionNotifications !==
+                defaults.enableCompletionNotifications ? (
+                  <div className="flex justify-end">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        updateSettings({
+                          enableCompletionNotifications: defaults.enableCompletionNotifications,
+                        })
+                      }
+                    >
+                      Restore default
+                    </Button>
+                  </div>
                 ) : null}
               </div>
             </section>

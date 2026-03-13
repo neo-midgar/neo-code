@@ -1290,6 +1290,17 @@ const makeGitCore = Effect.gen(function* () {
       fallbackErrorMessage: "git branch create failed",
     }).pipe(Effect.asVoid);
 
+  const deleteBranch: GitCoreShape["deleteBranch"] = (input) =>
+    executeGit(
+      "GitCore.deleteBranch",
+      input.cwd,
+      ["branch", input.force ? "-D" : "-d", input.branch],
+      {
+        timeoutMs: 10_000,
+        fallbackErrorMessage: "git branch delete failed",
+      },
+    ).pipe(Effect.asVoid);
+
   const checkoutBranch: GitCoreShape["checkoutBranch"] = (input) =>
     Effect.gen(function* () {
       const [localInputExists, remoteExists] = yield* Effect.all(
@@ -1407,6 +1418,7 @@ const makeGitCore = Effect.gen(function* () {
     removeWorktree,
     renameBranch,
     createBranch,
+    deleteBranch,
     checkoutBranch,
     initRepo,
     listLocalBranchNames,

@@ -4,11 +4,15 @@ import {
   AlertCircleIcon,
   BotIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   ExternalLinkIcon,
   LoaderCircleIcon,
+  SparklesIcon,
+  Trash2Icon,
   XCircleIcon,
 } from "lucide-react";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 
 import { gitObservePullRequestQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
 import { Badge } from "./ui/badge";
@@ -36,6 +40,55 @@ function isBotFinding(finding: GitPullRequestReviewFinding): boolean {
   );
 }
 
+function truncateText(value: string, maxChars: number): string {
+  if (value.length <= maxChars) {
+    return value;
+  }
+  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
+}
+
+function stripMarkdown(value: string): string {
+  return value
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/`([^`]+)`/g, "$1")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/^>\s?/gm, "")
+    .replace(/^#+\s+/gm, "")
+    .replace(/^[-*]\s+/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractFindingAdvice(finding: GitPullRequestReviewFinding): string | null {
+  const normalizedBody = finding.body.replace(/\r\n?/g, "\n").trim();
+  if (normalizedBody.length === 0) {
+    return null;
+  }
+
+  const sectionPatterns = [
+    /(?:^|\n)(?:#+\s*)?(?:possible fix|suggested fix|suggested solution|recommended fix|recommendation|how to fix|for ai agents|prompt for ai agents|implementation guidance)\s*:?\n([\s\S]*?)(?=\n(?:#+\s*\S|---+\s*$)|$)/i,
+    /(?:^|\n)\*\*(?:possible fix|suggested fix|suggested solution|recommended fix|recommendation|how to fix|for ai agents|prompt for ai agents|implementation guidance)\*\*\s*:?\n?([\s\S]*?)(?=\n\*\*|$)/i,
+  ];
+
+  for (const pattern of sectionPatterns) {
+    const match = normalizedBody.match(pattern);
+    const advice = stripMarkdown(match?.[1] ?? "");
+    if (advice.length > 0) {
+      return truncateText(advice, 700);
+    }
+  }
+
+  const cleanedBody = stripMarkdown(normalizedBody);
+  const paragraphs = cleanedBody
+    .split(/\n{2,}/)
+    .map((paragraph) => paragraph.trim())
+    .filter((paragraph) => paragraph.length > 0);
+  if (paragraphs.length === 0) {
+    return null;
+  }
+  return truncateText(paragraphs.slice(0, 2).join("\n\n"), 700);
+}
+
 function getReviewDecisionTone(reviewDecision: string | null): {
   label: string;
   className: string;
@@ -52,28 +105,49 @@ function getReviewDecisionTone(reviewDecision: string | null): {
   }
 }
 
+function getPullRequestStateTone(state: "open" | "closed" | "merged"): {
+  label: string;
+  className: string;
+} {
+  switch (state) {
+    case "merged":
+      return { label: "Merged", className: "text-emerald-700" };
+    case "closed":
+      return { label: "Closed", className: "text-muted-foreground" };
+    case "open":
+    default:
+      return { label: "Open", className: "text-sky-700" };
+  }
+}
+
 interface PullRequestObserverCardProps {
   gitCwd: string | null;
+  canCleanupThread?: boolean;
   onOpenUrl: (url: string) => void;
   onFixFinding: (input: {
     finding: GitPullRequestReviewFinding;
+    findingAdvice: string | null;
     observation: GitObservePullRequestResult;
   }) => void;
+  onCleanupThread?: () => void;
 }
 
 export function PullRequestObserverCard({
   gitCwd,
+  canCleanupThread = false,
   onOpenUrl,
   onFixFinding,
+  onCleanupThread,
 }: PullRequestObserverCardProps) {
+  const [expandedFindingIds, setExpandedFindingIds] = useState<Record<string, boolean>>({});
   const gitStatusQuery = useQuery(gitStatusQueryOptions(gitCwd));
-  const openPr = gitStatusQuery.data?.pr?.state === "open" ? gitStatusQuery.data.pr : null;
+  const trackedPr = gitStatusQuery.data?.pr ?? null;
   const observationQuery = useQuery({
     ...gitObservePullRequestQueryOptions({
       cwd: gitCwd,
-      reference: openPr?.url ?? null,
+      reference: trackedPr?.url ?? null,
     }),
-    enabled: gitCwd !== null && openPr !== null,
+    enabled: gitCwd !== null && trackedPr !== null,
   });
 
   const observation = observationQuery.data ?? null;
@@ -84,7 +158,7 @@ export function PullRequestObserverCard({
     );
   }, [observation?.findings]);
 
-  if (!gitCwd || !openPr) {
+  if (!gitCwd || !trackedPr) {
     return null;
   }
 
@@ -97,6 +171,7 @@ export function PullRequestObserverCard({
 
   const checkSummary = observation ? summarizeCheckBuckets(observation.checks) : null;
   const reviewDecisionTone = getReviewDecisionTone(observation?.reviewDecision ?? null);
+  const prStateTone = getPullRequestStateTone(trackedPr.state);
 
   return (
     <div className="border-b border-border/80 bg-muted/12 px-3 py-3 sm:px-5">
@@ -107,14 +182,17 @@ export function PullRequestObserverCard({
             size="xs"
             variant="outline"
             className="gap-1.5"
-            onClick={() => onOpenUrl(openPr.url)}
+            onClick={() => onOpenUrl(trackedPr.url)}
           >
-            <span>PR #{openPr.number}</span>
+            <span>PR #{trackedPr.number}</span>
             <ExternalLinkIcon className="size-3 opacity-70" />
           </Button>
           <span className="min-w-0 truncate text-sm font-medium text-foreground">
-            {openPr.title}
+            {trackedPr.title}
           </span>
+          <Badge variant="outline" className={prStateTone.className}>
+            {prStateTone.label}
+          </Badge>
           {reviewDecisionTone ? (
             <Badge variant="outline" className={reviewDecisionTone.className}>
               {reviewDecisionTone.label}
@@ -125,6 +203,18 @@ export function PullRequestObserverCard({
               <LoaderCircleIcon className="size-3 animate-spin" />
               Watching checks
             </span>
+          ) : null}
+          {trackedPr.state !== "open" && canCleanupThread && onCleanupThread ? (
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="ml-auto gap-1.5"
+              onClick={onCleanupThread}
+            >
+              <Trash2Icon className="size-3" />
+              Clean up locally
+            </Button>
           ) : null}
         </div>
 
@@ -161,79 +251,128 @@ export function PullRequestObserverCard({
 
             {observation.checks.length > 0 ? (
               <div className="flex max-h-36 flex-col gap-1 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
-                {observation.checks.map((check) => (
-                  <div
-                    key={`${check.name}:${check.workflow ?? "none"}`}
-                    className="flex items-center justify-between gap-3 rounded-md px-2 py-1"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate text-sm text-foreground">{check.name}</p>
-                      <p className="truncate text-muted-foreground text-xs">
-                        {check.workflow ?? check.event ?? check.state}
-                        {check.description ? ` · ${check.description}` : ""}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <Badge variant="outline">{check.bucket}</Badge>
-                      {check.link ? (
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => onOpenUrl(check.link!)}
-                        >
-                          Open
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                ))}
+                {observation.checks.map((check) =>
+                  (() => {
+                    const checkLink = check.link;
+                    return (
+                      <div
+                        key={`${check.name}:${check.workflow ?? "none"}`}
+                        className="flex items-center justify-between gap-3 rounded-md px-2 py-1"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm text-foreground">{check.name}</p>
+                          <p className="truncate text-muted-foreground text-xs">
+                            {check.workflow ?? check.event ?? check.state}
+                            {check.description ? ` · ${check.description}` : ""}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Badge variant="outline">{check.bucket}</Badge>
+                          {checkLink ? (
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="ghost"
+                              onClick={() => onOpenUrl(checkLink)}
+                            >
+                              Open
+                            </Button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })(),
+                )}
               </div>
             ) : null}
 
             {visibleFindings.length > 0 ? (
-              <div className="flex max-h-52 flex-col gap-2 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
-                {visibleFindings.map((finding) => (
-                  <div
-                    key={finding.id}
-                    className="rounded-lg border border-border/60 bg-background px-3 py-2"
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="truncate text-sm font-medium text-foreground">
-                            {formatFindingLocation(finding)}
+              <div className="flex max-h-72 flex-col gap-2 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
+                {visibleFindings.map((finding) => {
+                  const findingAdvice = isBotFinding(finding)
+                    ? extractFindingAdvice(finding)
+                    : null;
+                  const isExpanded = expandedFindingIds[finding.id] === true;
+                  return (
+                    <div
+                      key={finding.id}
+                      className="rounded-lg border border-border/60 bg-background px-3 py-2"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 space-y-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="truncate text-sm font-medium text-foreground">
+                              {formatFindingLocation(finding)}
+                            </p>
+                            <Badge variant="outline" className="gap-1">
+                              {isBotFinding(finding) ? <BotIcon className="size-3" /> : null}
+                              {finding.authorLogin}
+                            </Badge>
+                            {findingAdvice ? (
+                              <Badge variant="outline" className="gap-1 text-amber-700">
+                                <SparklesIcon className="size-3" />
+                                Advice extracted
+                              </Badge>
+                            ) : null}
+                          </div>
+                          <p className="whitespace-pre-wrap text-muted-foreground text-xs">
+                            {findingAdvice
+                              ? findingAdvice
+                              : truncateText(stripMarkdown(finding.body), 220)}
                           </p>
-                          <Badge variant="outline" className="gap-1">
-                            {isBotFinding(finding) ? <BotIcon className="size-3" /> : null}
-                            {finding.authorLogin}
-                          </Badge>
+                          {isExpanded ? (
+                            <div className="rounded-md border border-border/60 bg-muted/18 px-2 py-2">
+                              <p className="whitespace-pre-wrap text-muted-foreground text-xs">
+                                {finding.body}
+                              </p>
+                            </div>
+                          ) : null}
                         </div>
-                        <p className="mt-1 whitespace-pre-wrap text-muted-foreground text-xs">
-                          {finding.body}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 items-center gap-2">
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="outline"
-                          onClick={() => onFixFinding({ finding, observation })}
-                        >
-                          Fix
-                        </Button>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="ghost"
-                          onClick={() => onOpenUrl(finding.url)}
-                        >
-                          Open
-                        </Button>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="outline"
+                            onClick={() => onFixFinding({ finding, findingAdvice, observation })}
+                          >
+                            {findingAdvice ? "Fix advice" : "Fix"}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            onClick={() =>
+                              setExpandedFindingIds((current) => ({
+                                ...current,
+                                [finding.id]: !current[finding.id],
+                              }))
+                            }
+                          >
+                            {isExpanded ? (
+                              <>
+                                <ChevronUpIcon className="size-3" />
+                                Collapse
+                              </>
+                            ) : (
+                              <>
+                                <ChevronDownIcon className="size-3" />
+                                Expand
+                              </>
+                            )}
+                          </Button>
+                          <Button
+                            type="button"
+                            size="xs"
+                            variant="ghost"
+                            onClick={() => onOpenUrl(finding.url)}
+                          >
+                            Comment
+                          </Button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             ) : null}
           </>

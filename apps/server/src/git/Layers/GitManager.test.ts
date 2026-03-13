@@ -689,6 +689,37 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
+  it.effect("status hides merged PR metadata on the default branch", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+
+      const { manager } = yield* makeManager({
+        ghScenario: {
+          defaultBranch: "main",
+          prListSequence: [
+            JSON.stringify([
+              {
+                number: 27,
+                title: "Merged main PR",
+                url: "https://github.com/pingdotgg/codething-mvp/pull/27",
+                baseRefName: "main",
+                headRefName: "main",
+                state: "MERGED",
+                mergedAt: "2026-02-04T10:00:00Z",
+                updatedAt: "2026-02-04T10:00:00Z",
+              },
+            ]),
+          ],
+        },
+      });
+
+      const status = yield* manager.status({ cwd: repoDir });
+      expect(status.branch).toBe("main");
+      expect(status.pr).toBeNull();
+    }),
+  );
+
   it.effect("status prefers open PR when merged PR has newer updatedAt", () =>
     Effect.gen(function* () {
       const repoDir = yield* makeTempDir("t3code-git-manager-");

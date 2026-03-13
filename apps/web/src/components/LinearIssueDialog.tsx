@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
+import { useAppSettings } from "~/appSettings";
 import {
   linearBindProjectMutationOptions,
   linearImportIssueMutationOptions,
@@ -8,7 +9,6 @@ import {
   linearProjectIssuesQueryOptions,
   linearTeamsQueryOptions,
 } from "~/lib/linearReactQuery";
-import { useAppSettings } from "~/appSettings";
 import { serverProjectLinearBindingQueryOptions } from "~/lib/serverReactQuery";
 import { normalizeLinearIssueReference } from "@t3tools/shared/linear";
 import { Badge } from "./ui/badge";
@@ -67,6 +67,10 @@ function formatRelativeUpdatedAt(iso: string): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function isCompletedLinearIssue(issue: { state: { type: string } | null }): boolean {
+  return issue.state?.type.trim().toLowerCase() === "completed";
+}
+
 export function LinearIssueDialog({
   open,
   projectId,
@@ -81,6 +85,7 @@ export function LinearIssueDialog({
   const [manualReference, setManualReference] = useState(initialReference ?? "");
   const [manualReferenceDirty, setManualReferenceDirty] = useState(false);
   const [issueSearch, setIssueSearch] = useState("");
+  const [includeCompletedIssues, setIncludeCompletedIssues] = useState(false);
   const [selectedIssueIdentifier, setSelectedIssueIdentifier] = useState<string | null>(null);
   const [selectedTeamSelectionKey, setSelectedTeamSelectionKey] = useState("");
   const [bindingNotice, setBindingNotice] = useState<string | null>(null);
@@ -115,6 +120,7 @@ export function LinearIssueDialog({
     setManualReference(initialReference ?? "");
     setManualReferenceDirty(false);
     setIssueSearch("");
+    setIncludeCompletedIssues(false);
     setBindingNotice(null);
     const frame = window.requestAnimationFrame(() => {
       manualReferenceInputRef.current?.focus();
@@ -153,14 +159,20 @@ export function LinearIssueDialog({
           name: binding.teamName,
         }
       : null);
+  const selectedTeamLabel = selectedTeam
+    ? `${selectedTeam.credentialName} · ${selectedTeam.key} · ${selectedTeam.name}`
+    : null;
 
   const issueList = projectIssuesQuery.data?.issues ?? EMPTY_LINEAR_ISSUES;
   const filteredIssues = useMemo(() => {
     const normalizedSearch = issueSearch.trim().toLowerCase();
-    if (normalizedSearch.length === 0) {
-      return issueList;
-    }
     return issueList.filter((issue) => {
+      if (!includeCompletedIssues && isCompletedLinearIssue(issue)) {
+        return false;
+      }
+      if (normalizedSearch.length === 0) {
+        return true;
+      }
       const haystack = [
         issue.identifier,
         issue.title,
@@ -172,19 +184,19 @@ export function LinearIssueDialog({
         .toLowerCase();
       return haystack.includes(normalizedSearch);
     });
-  }, [issueList, issueSearch]);
+  }, [includeCompletedIssues, issueList, issueSearch]);
 
   useEffect(() => {
     if (!open || filteredIssues.length === 0 || normalizeLinearIssueReference(manualReference)) {
       return;
     }
     setSelectedIssueIdentifier((current) => {
-      if (current && issueList.some((issue) => issue.identifier === current)) {
+      if (current && filteredIssues.some((issue) => issue.identifier === current)) {
         return current;
       }
       return filteredIssues[0]?.identifier ?? null;
     });
-  }, [filteredIssues, issueList, manualReference, open]);
+  }, [filteredIssues, manualReference, open]);
 
   const normalizedManualReference = normalizeLinearIssueReference(manualReference);
   const activeReference = normalizedManualReference ?? selectedIssueIdentifier;
@@ -237,7 +249,7 @@ export function LinearIssueDialog({
         }
       }}
     >
-      <DialogPopup className="max-w-3xl">
+      <DialogPopup className="max-w-6xl">
         <DialogHeader>
           <DialogTitle>Import Linear Issue</DialogTitle>
           <DialogDescription>
@@ -273,7 +285,9 @@ export function LinearIssueDialog({
                       placeholder={
                         teamsQuery.isPending ? "Loading workspaces..." : "Choose a Linear workspace"
                       }
-                    />
+                    >
+                      {selectedTeamLabel}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {teams.map((team) => (
@@ -353,15 +367,26 @@ export function LinearIssueDialog({
             ) : null}
           </section>
 
-          <section className="grid gap-4 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]">
+          <section className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(0,1.25fr)]">
             <div className="space-y-3 rounded-xl border border-border/70 bg-background p-4">
-              <div className="space-y-1">
-                <p className="font-medium text-sm">Workspace Issues</p>
-                <p className="text-muted-foreground text-xs">
-                  {binding
-                    ? `Showing recent issues from ${binding.credentialName} · ${binding.teamKey} · ${binding.teamName}.`
-                    : "Bind a workspace to browse recent issues for this project."}
-                </p>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div className="space-y-1">
+                  <p className="font-medium text-sm">Workspace Issues</p>
+                  <p className="text-muted-foreground text-xs">
+                    {binding
+                      ? `Showing recent issues from ${binding.credentialName} · ${binding.teamKey} · ${binding.teamName}.`
+                      : "Bind a workspace to browse recent issues for this project."}
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={includeCompletedIssues ? "outline" : "ghost"}
+                  disabled={!binding}
+                  onClick={() => setIncludeCompletedIssues((current) => !current)}
+                >
+                  {includeCompletedIssues ? "Hide completed" : "Show completed"}
+                </Button>
               </div>
 
               <label className="grid gap-1.5">
@@ -378,7 +403,7 @@ export function LinearIssueDialog({
                 />
               </label>
 
-              <div className="max-h-80 space-y-2 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
+              <div className="max-h-96 space-y-2 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
                 {projectIssuesQuery.isPending ? (
                   <div className="flex items-center gap-2 px-2 py-4 text-muted-foreground text-xs">
                     <Spinner className="size-3.5" />
@@ -406,8 +431,11 @@ export function LinearIssueDialog({
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="min-w-0">
-                            <p className="truncate font-medium text-sm">
-                              {issue.identifier} · {issue.title}
+                            <p className="truncate text-sm font-medium text-foreground">
+                              {issue.identifier}
+                            </p>
+                            <p className="line-clamp-2 text-sm font-medium text-foreground">
+                              {issue.title}
                             </p>
                             <p className="truncate text-muted-foreground text-xs">
                               {issue.state?.name ?? "No state"}
@@ -424,7 +452,9 @@ export function LinearIssueDialog({
                 ) : (
                   <div className="px-2 py-4 text-muted-foreground text-xs">
                     {binding
-                      ? "No issues matched the current filter."
+                      ? includeCompletedIssues
+                        ? "No issues matched the current filter."
+                        : "No open issues matched the current filter."
                       : "No workspace is bound to this project yet."}
                   </div>
                 )}
@@ -484,8 +514,11 @@ export function LinearIssueDialog({
                 <div className="space-y-3 rounded-xl border border-border/70 bg-muted/24 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
-                      <p className="truncate font-medium text-sm">
-                        {liveIssue.identifier} · {liveIssue.title}
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {liveIssue.identifier}
+                      </p>
+                      <p className="line-clamp-2 text-sm font-medium text-foreground">
+                        {liveIssue.title}
                       </p>
                       <p className="truncate text-muted-foreground text-xs">
                         {liveIssue.teamName ?? "Unknown team"}
@@ -498,7 +531,7 @@ export function LinearIssueDialog({
                       </span>
                     ) : null}
                   </div>
-                  <p className="line-clamp-6 whitespace-pre-wrap text-muted-foreground text-xs">
+                  <p className="line-clamp-8 whitespace-pre-wrap text-muted-foreground text-xs">
                     {liveIssue.description.trim().length > 0
                       ? liveIssue.description
                       : "No description provided."}
