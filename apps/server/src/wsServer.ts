@@ -891,6 +891,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.serverGetLinearConfig:
         return yield* serverSettings.getLinearConfig();
 
+      case WS_METHODS.serverGetGitSettings:
+        return yield* serverSettings.getGitSettings();
+
       case WS_METHODS.serverGetLinearProjectBindings:
         return {
           bindings: yield* serverSettings.listLinearProjectBindings(),
@@ -914,6 +917,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       case WS_METHODS.serverSetProjectLinearBinding: {
         const body = stripRequestTag(request.body);
         return yield* serverSettings.setLinearProjectBinding(body);
+      }
+
+      case WS_METHODS.serverSetGitSettings: {
+        const body = stripRequestTag(request.body);
+        return yield* serverSettings.setGitSettings(body);
       }
 
       case WS_METHODS.serverUpsertKeybinding: {

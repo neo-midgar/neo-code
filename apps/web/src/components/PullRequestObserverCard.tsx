@@ -15,6 +15,11 @@ import {
 import { useMemo, useState } from "react";
 
 import { gitObservePullRequestQueryOptions, gitStatusQueryOptions } from "~/lib/gitReactQuery";
+import {
+  extractPullRequestFindingAdvice,
+  isBotPullRequestFinding,
+  stripPullRequestReviewMarkdown,
+} from "~/lib/pullRequestReview";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
@@ -31,62 +36,6 @@ function summarizeCheckBuckets(checks: GitObservePullRequestResult["checks"]) {
 
 function formatFindingLocation(finding: GitPullRequestReviewFinding): string {
   return finding.line ? `${finding.path}:${finding.line}` : finding.path;
-}
-
-function isBotFinding(finding: GitPullRequestReviewFinding): boolean {
-  return (
-    finding.authorLogin.toLowerCase().includes("bot") ||
-    finding.authorLogin.toLowerCase().includes("coderabbit")
-  );
-}
-
-function truncateText(value: string, maxChars: number): string {
-  if (value.length <= maxChars) {
-    return value;
-  }
-  return `${value.slice(0, Math.max(0, maxChars - 1)).trimEnd()}...`;
-}
-
-function stripMarkdown(value: string): string {
-  return value
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`([^`]+)`/g, "$1")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/^>\s?/gm, "")
-    .replace(/^#+\s+/gm, "")
-    .replace(/^[-*]\s+/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
-
-function extractFindingAdvice(finding: GitPullRequestReviewFinding): string | null {
-  const normalizedBody = finding.body.replace(/\r\n?/g, "\n").trim();
-  if (normalizedBody.length === 0) {
-    return null;
-  }
-
-  const sectionPatterns = [
-    /(?:^|\n)(?:#+\s*)?(?:possible fix|suggested fix|suggested solution|recommended fix|recommendation|how to fix|for ai agents|prompt for ai agents|implementation guidance)\s*:?\n([\s\S]*?)(?=\n(?:#+\s*\S|---+\s*$)|$)/i,
-    /(?:^|\n)\*\*(?:possible fix|suggested fix|suggested solution|recommended fix|recommendation|how to fix|for ai agents|prompt for ai agents|implementation guidance)\*\*\s*:?\n?([\s\S]*?)(?=\n\*\*|$)/i,
-  ];
-
-  for (const pattern of sectionPatterns) {
-    const match = normalizedBody.match(pattern);
-    const advice = stripMarkdown(match?.[1] ?? "");
-    if (advice.length > 0) {
-      return truncateText(advice, 700);
-    }
-  }
-
-  const cleanedBody = stripMarkdown(normalizedBody);
-  const paragraphs = cleanedBody
-    .split(/\n{2,}/)
-    .map((paragraph) => paragraph.trim())
-    .filter((paragraph) => paragraph.length > 0);
-  if (paragraphs.length === 0) {
-    return null;
-  }
-  return truncateText(paragraphs.slice(0, 2).join("\n\n"), 700);
 }
 
 function getReviewDecisionTone(reviewDecision: string | null): {
@@ -129,6 +78,13 @@ interface PullRequestObserverCardProps {
     findingAdvice: string | null;
     observation: GitObservePullRequestResult;
   }) => void;
+  onFixAllBotFindings: (input: {
+    observation: GitObservePullRequestResult;
+    findings: ReadonlyArray<{
+      finding: GitPullRequestReviewFinding;
+      findingAdvice: string | null;
+    }>;
+  }) => void;
   onCleanupThread?: () => void;
 }
 
@@ -137,6 +93,7 @@ export function PullRequestObserverCard({
   canCleanupThread = false,
   onOpenUrl,
   onFixFinding,
+  onFixAllBotFindings,
   onCleanupThread,
 }: PullRequestObserverCardProps) {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -155,9 +112,21 @@ export function PullRequestObserverCard({
   const visibleFindings = useMemo(() => {
     const findings = observation?.findings ?? [];
     return findings.toSorted(
-      (left, right) => Number(isBotFinding(right)) - Number(isBotFinding(left)),
+      (left, right) =>
+        Number(isBotPullRequestFinding(right)) - Number(isBotPullRequestFinding(left)),
     );
   }, [observation?.findings]);
+  const botFindingsWithAdvice = useMemo(
+    () =>
+      visibleFindings
+        .filter((finding) => isBotPullRequestFinding(finding))
+        .map((finding) => ({
+          finding,
+          findingAdvice: extractPullRequestFindingAdvice(finding),
+        }))
+        .filter(({ findingAdvice }) => findingAdvice !== null),
+    [visibleFindings],
+  );
 
   if (!gitCwd || !trackedPr) {
     return null;
@@ -269,6 +238,21 @@ export function PullRequestObserverCard({
                 {observation.findings.length} review finding
                 {observation.findings.length === 1 ? "" : "s"}
               </Badge>
+              {botFindingsWithAdvice.length > 1 ? (
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  onClick={() =>
+                    onFixAllBotFindings({
+                      observation,
+                      findings: botFindingsWithAdvice,
+                    })
+                  }
+                >
+                  Fix all CodeRabbit
+                </Button>
+              ) : null}
             </div>
 
             {detailsExpanded && observation.checks.length > 0 ? (
@@ -311,8 +295,8 @@ export function PullRequestObserverCard({
             {detailsExpanded && visibleFindings.length > 0 ? (
               <div className="flex max-h-72 flex-col gap-2 overflow-y-auto rounded-lg border border-border/60 bg-muted/14 p-2">
                 {visibleFindings.map((finding) => {
-                  const findingAdvice = isBotFinding(finding)
-                    ? extractFindingAdvice(finding)
+                  const findingAdvice = isBotPullRequestFinding(finding)
+                    ? extractPullRequestFindingAdvice(finding)
                     : null;
                   const isExpanded = expandedFindingIds[finding.id] === true;
                   return (
@@ -327,7 +311,9 @@ export function PullRequestObserverCard({
                               {formatFindingLocation(finding)}
                             </p>
                             <Badge variant="outline" className="gap-1">
-                              {isBotFinding(finding) ? <BotIcon className="size-3" /> : null}
+                              {isBotPullRequestFinding(finding) ? (
+                                <BotIcon className="size-3" />
+                              ) : null}
                               {finding.authorLogin}
                             </Badge>
                             {findingAdvice ? (
@@ -340,7 +326,7 @@ export function PullRequestObserverCard({
                           <p className="whitespace-pre-wrap text-muted-foreground text-xs">
                             {findingAdvice
                               ? findingAdvice
-                              : truncateText(stripMarkdown(finding.body), 220)}
+                              : stripPullRequestReviewMarkdown(finding.body)}
                           </p>
                           {isExpanded ? (
                             <div className="rounded-md border border-border/60 bg-muted/18 px-2 py-2">

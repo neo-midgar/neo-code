@@ -63,6 +63,10 @@ import {
 } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import {
+  buildPullRequestBatchFixPrompt,
+  buildPullRequestFindingFixPrompt,
+} from "~/lib/pullRequestReview";
 
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -3174,21 +3178,28 @@ export default function ChatView({ threadId }: ChatViewProps) {
       findingAdvice: string | null;
       observation: GitObservePullRequestResult;
     }) => {
-      const location = input.finding.line
-        ? `${input.finding.path}:${input.finding.line}`
-        : input.finding.path;
-      const prompt = [
-        `Address this pull request review finding on PR #${input.observation.pullRequest.number}: ${input.observation.pullRequest.title}`,
-        `Reviewer: ${input.finding.authorLogin}`,
-        `Location: ${location}`,
-        ...(input.findingAdvice ? [`Suggested fix:\n${input.findingAdvice}`] : []),
-        `Original comment:\n${input.finding.body}`,
-        "Task:",
-        "Inspect the current branch/worktree, implement the fix if the feedback is valid, and summarize the change clearly.",
-        "If you disagree with the finding, explain why before making any code changes.",
-      ].join("\n\n");
       await startTextOnlyTurn({
-        text: prompt,
+        text: buildPullRequestFindingFixPrompt(input),
+        nextInteractionMode: "default",
+        errorPrefix: "Failed to start pull request fix turn",
+      });
+    },
+    [startTextOnlyTurn],
+  );
+
+  const onFixAllPullRequestBotFindings = useCallback(
+    async (input: {
+      observation: GitObservePullRequestResult;
+      findings: ReadonlyArray<{
+        finding: GitPullRequestReviewFinding;
+        findingAdvice: string | null;
+      }>;
+    }) => {
+      if (input.findings.length === 0) {
+        return;
+      }
+      await startTextOnlyTurn({
+        text: buildPullRequestBatchFixPrompt(input),
         nextInteractionMode: "default",
         errorPrefix: "Failed to start pull request fix turn",
       });
@@ -3819,6 +3830,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           void api.shell.openExternal(url);
         }}
         onFixFinding={onFixPullRequestFinding}
+        onFixAllBotFindings={onFixAllPullRequestBotFindings}
         onCleanupThread={onCleanupClosedPullRequestThread}
       />
 

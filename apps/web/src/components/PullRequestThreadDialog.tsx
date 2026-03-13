@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDebouncedValue } from "@tanstack/react-pacer";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
+import { usePullRequestWorktreeBranchPrefix } from "~/hooks/usePullRequestWorktreeBranchPrefix";
 import {
   gitPreparePullRequestThreadMutationOptions,
   gitResolvePullRequestQueryOptions,
@@ -39,7 +39,7 @@ export function PullRequestThreadDialog({
   onPrepared,
 }: PullRequestThreadDialogProps) {
   const queryClient = useQueryClient();
-  const { settings } = useAppSettings();
+  const { branchPrefix } = usePullRequestWorktreeBranchPrefix();
   const referenceInputRef = useRef<HTMLInputElement>(null);
   const [reference, setReference] = useState(initialReference ?? "");
   const [referenceDirty, setReferenceDirty] = useState(false);
@@ -132,7 +132,7 @@ export function PullRequestThreadDialog({
         const result = await preparePullRequestThreadMutation.mutateAsync({
           reference: parsedReference,
           mode,
-          branchPrefix: settings.pullRequestWorktreeBranchPrefix,
+          branchPrefix,
         });
         await onPrepared({
           branch: result.branch,
@@ -150,7 +150,7 @@ export function PullRequestThreadDialog({
       parsedReference,
       preparePullRequestThreadMutation,
       resolvedPullRequest,
-      settings.pullRequestWorktreeBranchPrefix,
+      branchPrefix,
     ],
   );
 

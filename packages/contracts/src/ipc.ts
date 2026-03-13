@@ -41,10 +41,12 @@ import type {
 import type { ServerConfig } from "./server";
 import type {
   ServerDeleteLinearCredentialInput,
+  ServerGitSettings,
   ServerGetLinearProjectBindingsResult,
   ServerGetProjectLinearBindingInput,
   ServerLinearConfig,
   ServerLinearProjectBinding,
+  ServerSetGitSettingsInput,
   ServerUpsertLinearCredentialInput,
   ServerSetProjectLinearBindingInput,
 } from "./server";
@@ -193,6 +195,7 @@ export interface NativeApi {
   server: {
     getConfig: () => Promise<ServerConfig>;
     getLinearConfig: () => Promise<ServerLinearConfig>;
+    getGitSettings: () => Promise<ServerGitSettings>;
     getLinearProjectBindings: () => Promise<ServerGetLinearProjectBindingsResult>;
     getProjectLinearBinding: (
       input: ServerGetProjectLinearBindingInput,
@@ -206,6 +209,7 @@ export interface NativeApi {
     setProjectLinearBinding: (
       input: ServerSetProjectLinearBindingInput,
     ) => Promise<ServerLinearProjectBinding | null>;
+    setGitSettings: (input: ServerSetGitSettingsInput) => Promise<ServerGitSettings>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
   };
   orchestration: {

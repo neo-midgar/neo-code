@@ -125,6 +125,16 @@ export const ServerGetLinearProjectBindingsResult = Schema.Struct({
 });
 export type ServerGetLinearProjectBindingsResult = typeof ServerGetLinearProjectBindingsResult.Type;
 
+export const ServerGitSettings = Schema.Struct({
+  pullRequestWorktreeBranchPrefix: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export type ServerGitSettings = typeof ServerGitSettings.Type;
+
+export const ServerSetGitSettingsInput = Schema.Struct({
+  pullRequestWorktreeBranchPrefix: TrimmedNonEmptyString.check(Schema.isMaxLength(128)),
+});
+export type ServerSetGitSettingsInput = typeof ServerSetGitSettingsInput.Type;
+
 export const ServerConfigUpdatedPayload = Schema.Struct({
   issues: ServerConfigIssues,
   providers: ServerProviderStatuses,

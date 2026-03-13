@@ -1,11 +1,13 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
+import { normalizePullRequestWorktreeBranchPrefix } from "@t3tools/shared/git";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 
 import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
+import { usePullRequestWorktreeBranchPrefix } from "../hooks/usePullRequestWorktreeBranchPrefix";
 import { useTheme } from "../hooks/useTheme";
 import {
   getNotificationPermission,
@@ -14,8 +16,10 @@ import {
 } from "../lib/notifications";
 import {
   serverConfigQueryOptions,
+  serverGitSettingsQueryOptions,
   serverLinearConfigQueryOptions,
   serverQueryKeys,
+  serverSetGitSettingsMutationOptions,
 } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
 import { preferredTerminalEditor } from "../terminal-links";
@@ -92,11 +96,13 @@ function patchCustomModels(provider: ProviderKind, models: string[]) {
 function SettingsRouteView() {
   const { theme, setTheme, resolvedTheme } = useTheme();
   const { settings, defaults, updateSettings } = useAppSettings();
+  const { branchPrefix: resolvedPullRequestBranchPrefix } = usePullRequestWorktreeBranchPrefix();
   const [notificationPermission, setNotificationPermission] = useState<NotificationSupportState>(
     () => getNotificationPermission(),
   );
   const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
+  const serverGitSettingsQuery = useQuery(serverGitSettingsQueryOptions());
   const serverLinearConfigQuery = useQuery(serverLinearConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
@@ -104,6 +110,8 @@ function SettingsRouteView() {
   const [linearCredentialNameInput, setLinearCredentialNameInput] = useState("");
   const [linearCredentialApiKeyInput, setLinearCredentialApiKeyInput] = useState("");
   const [linearCredentialMessage, setLinearCredentialMessage] = useState<string | null>(null);
+  const [gitBranchPrefixInput, setGitBranchPrefixInput] = useState(resolvedPullRequestBranchPrefix);
+  const [gitSettingsMessage, setGitSettingsMessage] = useState<string | null>(null);
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
@@ -117,6 +125,7 @@ function SettingsRouteView() {
   const codexHomePath = settings.codexHomePath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const linearConfig = serverLinearConfigQuery.data ?? null;
+  const saveGitSettingsMutation = useMutation(serverSetGitSettingsMutationOptions({ queryClient }));
   const saveLinearCredentialMutation = useMutation({
     mutationFn: async (input: { credentialId?: string | null; name: string; apiKey: string }) => {
       const api = ensureNativeApi();
@@ -266,6 +275,10 @@ function SettingsRouteView() {
     },
     [updateSettings],
   );
+
+  useEffect(() => {
+    setGitBranchPrefixInput(resolvedPullRequestBranchPrefix);
+  }, [resolvedPullRequestBranchPrefix]);
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground isolate">
@@ -745,7 +758,8 @@ function SettingsRouteView() {
               <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Git</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Customize generated Git naming defaults used by PR worktree preparation.
+                  Customize generated Git naming defaults used by PR worktree preparation. This is
+                  stored server-side so it survives app reinstalls and upgrades.
                 </p>
               </div>
 
@@ -756,34 +770,90 @@ function SettingsRouteView() {
                   </span>
                   <Input
                     id="pr-worktree-branch-prefix"
-                    value={settings.pullRequestWorktreeBranchPrefix}
-                    onChange={(event) =>
-                      updateSettings({
-                        pullRequestWorktreeBranchPrefix: event.target.value,
-                      })
-                    }
+                    value={gitBranchPrefixInput}
+                    onChange={(event) => {
+                      setGitBranchPrefixInput(event.target.value);
+                      setGitSettingsMessage(null);
+                    }}
                     placeholder="t3code"
                     spellCheck={false}
                   />
                   <span className="text-xs text-muted-foreground">
                     Used for generated fork PR worktree branches such as{" "}
-                    <code>{settings.pullRequestWorktreeBranchPrefix}/pr-42/main</code>.
+                    <code>
+                      {normalizePullRequestWorktreeBranchPrefix(gitBranchPrefixInput)}/pr-42/main
+                    </code>
+                    .
                   </span>
                 </label>
 
-                <div className="flex justify-end">
+                <div className="flex flex-wrap justify-end gap-2">
+                  <Button
+                    size="xs"
+                    onClick={() => {
+                      const normalizedPrefix =
+                        normalizePullRequestWorktreeBranchPrefix(gitBranchPrefixInput);
+                      void saveGitSettingsMutation
+                        .mutateAsync({
+                          pullRequestWorktreeBranchPrefix: normalizedPrefix,
+                        })
+                        .then(() => {
+                          updateSettings({
+                            pullRequestWorktreeBranchPrefix: normalizedPrefix,
+                          });
+                          setGitBranchPrefixInput(normalizedPrefix);
+                          setGitSettingsMessage("Saved Git defaults.");
+                        })
+                        .catch((error) => {
+                          setGitSettingsMessage(
+                            error instanceof Error ? error.message : "Failed to save Git defaults.",
+                          );
+                        });
+                    }}
+                    disabled={saveGitSettingsMutation.isPending}
+                  >
+                    {saveGitSettingsMutation.isPending ? "Saving..." : "Save Git defaults"}
+                  </Button>
                   <Button
                     size="xs"
                     variant="outline"
-                    onClick={() =>
-                      updateSettings({
-                        pullRequestWorktreeBranchPrefix: defaults.pullRequestWorktreeBranchPrefix,
-                      })
-                    }
+                    onClick={() => {
+                      const resetPrefix = defaults.pullRequestWorktreeBranchPrefix;
+                      setGitBranchPrefixInput(resetPrefix);
+                      void saveGitSettingsMutation
+                        .mutateAsync({
+                          pullRequestWorktreeBranchPrefix: resetPrefix,
+                        })
+                        .then(() => {
+                          updateSettings({
+                            pullRequestWorktreeBranchPrefix: resetPrefix,
+                          });
+                          setGitSettingsMessage("Reset Git defaults.");
+                        })
+                        .catch((error) => {
+                          setGitSettingsMessage(
+                            error instanceof Error
+                              ? error.message
+                              : "Failed to reset Git defaults.",
+                          );
+                        });
+                    }}
+                    disabled={saveGitSettingsMutation.isPending}
                   >
                     Reset Git defaults
                   </Button>
                 </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Active saved prefix:{" "}
+                  <span className="font-medium text-foreground">
+                    {serverGitSettingsQuery.data?.pullRequestWorktreeBranchPrefix ??
+                      resolvedPullRequestBranchPrefix}
+                  </span>
+                </p>
+                {gitSettingsMessage ? (
+                  <p className="text-xs text-muted-foreground">{gitSettingsMessage}</p>
+                ) : null}
               </div>
             </section>
 

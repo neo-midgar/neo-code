@@ -1,4 +1,5 @@
 import { Effect, FileSystem, Layer, Path, Schema, ServiceMap } from "effect";
+import { normalizePullRequestWorktreeBranchPrefix } from "@t3tools/shared/git";
 
 import { ServerConfig } from "./config";
 
@@ -8,6 +9,7 @@ const LEGACY_LINEAR_CREDENTIAL_ID = "saved-default";
 const LEGACY_LINEAR_CREDENTIAL_NAME = "Default";
 
 interface PersistedServerSettings {
+  readonly pullRequestWorktreeBranchPrefix?: string;
   readonly linearApiKey?: string;
   readonly linearCredentials?: Record<string, PersistedLinearCredential>;
   readonly linearProjectBindings?: Record<string, PersistedLinearProjectBinding>;
@@ -51,7 +53,12 @@ export interface LinearProjectBinding {
   readonly updatedAt: string;
 }
 
+export interface GitSettings {
+  readonly pullRequestWorktreeBranchPrefix: string;
+}
+
 export interface ServerSettingsShape {
+  readonly getGitSettings: () => Effect.Effect<GitSettings, ServerSettingsError>;
   readonly getLinearConfig: () => Effect.Effect<LinearConfig, ServerSettingsError>;
   readonly listLinearCredentials: () => Effect.Effect<
     ReadonlyArray<LinearCredential>,
@@ -83,6 +90,9 @@ export interface ServerSettingsShape {
     readonly teamKey: string | null;
     readonly teamName: string | null;
   }) => Effect.Effect<LinearProjectBinding | null, ServerSettingsError>;
+  readonly setGitSettings: (input: {
+    readonly pullRequestWorktreeBranchPrefix: string;
+  }) => Effect.Effect<GitSettings, ServerSettingsError>;
 }
 
 export class ServerSettings extends ServiceMap.Service<ServerSettings, ServerSettingsShape>()(
@@ -103,6 +113,8 @@ export class ServerSettingsError extends Schema.TaggedErrorClass<ServerSettingsE
 }
 
 const emptySettings = (): PersistedServerSettings => ({});
+const DEFAULT_PULL_REQUEST_WORKTREE_BRANCH_PREFIX =
+  normalizePullRequestWorktreeBranchPrefix("t3code");
 
 const normalizeStoredKey = (value: string | null | undefined): string | null => {
   const trimmed = value?.trim() ?? "";
@@ -190,6 +202,21 @@ const makeServerSettings = Effect.gen(function* () {
       }
 
       const rawRecord = raw as Record<string, unknown>;
+      const pullRequestWorktreeBranchPrefixValue = rawRecord.pullRequestWorktreeBranchPrefix;
+      let pullRequestWorktreeBranchPrefix: string | null = null;
+      if (pullRequestWorktreeBranchPrefixValue !== undefined) {
+        if (typeof pullRequestWorktreeBranchPrefixValue !== "string") {
+          return yield* new ServerSettingsError({
+            operation: "readPersistedSettings",
+            detail: "The saved PR worktree branch prefix must be a string.",
+          });
+        }
+
+        pullRequestWorktreeBranchPrefix = normalizePullRequestWorktreeBranchPrefix(
+          pullRequestWorktreeBranchPrefixValue,
+        );
+      }
+
       const legacyLinearApiKeyValue = rawRecord.linearApiKey;
       let legacyLinearApiKey: string | null = null;
       if (legacyLinearApiKeyValue !== undefined) {
@@ -357,6 +384,7 @@ const makeServerSettings = Effect.gen(function* () {
       }
 
       return {
+        ...(pullRequestWorktreeBranchPrefix ? { pullRequestWorktreeBranchPrefix } : {}),
         ...(linearCredentials && Object.keys(linearCredentials).length > 0
           ? { linearCredentials }
           : {}),
@@ -423,6 +451,15 @@ const makeServerSettings = Effect.gen(function* () {
 
   const getLinearConfig = (): Effect.Effect<LinearConfig, ServerSettingsError> =>
     listLinearCredentials().pipe(Effect.map((credentials) => summarizeLinearConfig(credentials)));
+
+  const getGitSettings = (): Effect.Effect<GitSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const persisted = yield* readPersistedSettings();
+      return {
+        pullRequestWorktreeBranchPrefix:
+          persisted.pullRequestWorktreeBranchPrefix ?? DEFAULT_PULL_REQUEST_WORKTREE_BRANCH_PREFIX,
+      };
+    });
 
   const resolveLinearApiKey = (
     credentialId?: string | null,
@@ -591,6 +628,9 @@ const makeServerSettings = Effect.gen(function* () {
       );
 
       yield* writePersistedSettings({
+        ...(persisted.pullRequestWorktreeBranchPrefix
+          ? { pullRequestWorktreeBranchPrefix: persisted.pullRequestWorktreeBranchPrefix }
+          : {}),
         ...(Object.keys(nextCredentials).length > 0 ? { linearCredentials: nextCredentials } : {}),
         ...(Object.keys(nextBindings).length > 0 ? { linearProjectBindings: nextBindings } : {}),
       });
@@ -627,6 +667,9 @@ const makeServerSettings = Effect.gen(function* () {
       );
 
       yield* writePersistedSettings({
+        ...(persisted.pullRequestWorktreeBranchPrefix
+          ? { pullRequestWorktreeBranchPrefix: persisted.pullRequestWorktreeBranchPrefix }
+          : {}),
         ...(Object.keys(nextCredentials).length > 0 ? { linearCredentials: nextCredentials } : {}),
         ...(Object.keys(nextBindings).length > 0 ? { linearProjectBindings: nextBindings } : {}),
       });
@@ -662,6 +705,9 @@ const makeServerSettings = Effect.gen(function* () {
       if (!credentialId && !credentialName && !teamId && !teamKey && !teamName) {
         delete existingBindings[projectId];
         yield* writePersistedSettings({
+          ...(persisted.pullRequestWorktreeBranchPrefix
+            ? { pullRequestWorktreeBranchPrefix: persisted.pullRequestWorktreeBranchPrefix }
+            : {}),
           ...(persisted.linearCredentials && Object.keys(persisted.linearCredentials).length > 0
             ? { linearCredentials: persisted.linearCredentials }
             : {}),
@@ -698,6 +744,9 @@ const makeServerSettings = Effect.gen(function* () {
       };
       existingBindings[projectId] = persistedBinding;
       yield* writePersistedSettings({
+        ...(persisted.pullRequestWorktreeBranchPrefix
+          ? { pullRequestWorktreeBranchPrefix: persisted.pullRequestWorktreeBranchPrefix }
+          : {}),
         ...(persisted.linearCredentials && Object.keys(persisted.linearCredentials).length > 0
           ? { linearCredentials: persisted.linearCredentials }
           : {}),
@@ -717,7 +766,35 @@ const makeServerSettings = Effect.gen(function* () {
       return normalizedBinding;
     });
 
+  const setGitSettings = (input: {
+    readonly pullRequestWorktreeBranchPrefix: string;
+  }): Effect.Effect<GitSettings, ServerSettingsError> =>
+    Effect.gen(function* () {
+      const persisted = yield* readPersistedSettings();
+      const pullRequestWorktreeBranchPrefix = normalizePullRequestWorktreeBranchPrefix(
+        input.pullRequestWorktreeBranchPrefix,
+      );
+
+      yield* writePersistedSettings({
+        ...(pullRequestWorktreeBranchPrefix !== DEFAULT_PULL_REQUEST_WORKTREE_BRANCH_PREFIX
+          ? { pullRequestWorktreeBranchPrefix }
+          : {}),
+        ...(persisted.linearCredentials && Object.keys(persisted.linearCredentials).length > 0
+          ? { linearCredentials: persisted.linearCredentials }
+          : {}),
+        ...(persisted.linearProjectBindings &&
+        Object.keys(persisted.linearProjectBindings).length > 0
+          ? { linearProjectBindings: persisted.linearProjectBindings }
+          : {}),
+      });
+
+      return {
+        pullRequestWorktreeBranchPrefix,
+      };
+    });
+
   return {
+    getGitSettings,
     getLinearConfig,
     listLinearCredentials,
     resolveLinearApiKey,
@@ -726,6 +803,7 @@ const makeServerSettings = Effect.gen(function* () {
     upsertLinearCredential,
     deleteLinearCredential,
     setLinearProjectBinding,
+    setGitSettings,
   } satisfies ServerSettingsShape;
 });
 

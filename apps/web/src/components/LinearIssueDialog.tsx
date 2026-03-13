@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { useAppSettings } from "~/appSettings";
 import {
   linearBindProjectMutationOptions,
   linearImportIssueMutationOptions,
@@ -9,6 +8,7 @@ import {
   linearProjectIssuesQueryOptions,
   linearTeamsQueryOptions,
 } from "~/lib/linearReactQuery";
+import { usePullRequestWorktreeBranchPrefix } from "~/hooks/usePullRequestWorktreeBranchPrefix";
 import { serverProjectLinearBindingQueryOptions } from "~/lib/serverReactQuery";
 import { normalizeLinearIssueReference } from "@t3tools/shared/linear";
 import { Badge } from "./ui/badge";
@@ -80,7 +80,7 @@ export function LinearIssueDialog({
   onImported,
 }: LinearIssueDialogProps) {
   const queryClient = useQueryClient();
-  const { settings } = useAppSettings();
+  const { branchPrefix } = usePullRequestWorktreeBranchPrefix();
   const manualReferenceInputRef = useRef<HTMLInputElement>(null);
   const [manualReference, setManualReference] = useState(initialReference ?? "");
   const [manualReferenceDirty, setManualReferenceDirty] = useState(false);
@@ -495,7 +495,7 @@ export function LinearIssueDialog({
                       .mutateAsync({
                         reference: activeReference,
                         credentialId: activeCredentialId,
-                        branchPrefix: settings.pullRequestWorktreeBranchPrefix,
+                        branchPrefix,
                       })
                       .then((result) => {
                         onImported(result.threadId);
@@ -576,7 +576,7 @@ export function LinearIssueDialog({
               const result = await importMutation.mutateAsync({
                 reference: activeReference,
                 credentialId: activeCredentialId,
-                branchPrefix: settings.pullRequestWorktreeBranchPrefix,
+                branchPrefix,
               });
               onImported(result.threadId);
               onOpenChange(false);

@@ -169,6 +169,7 @@ export function createWsNativeApi(): NativeApi {
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
       getLinearConfig: () => transport.request(WS_METHODS.serverGetLinearConfig),
+      getGitSettings: () => transport.request(WS_METHODS.serverGetGitSettings),
       getLinearProjectBindings: () => transport.request(WS_METHODS.serverGetLinearProjectBindings),
       getProjectLinearBinding: (input) =>
         transport.request(WS_METHODS.serverGetProjectLinearBinding, input),
@@ -178,6 +179,7 @@ export function createWsNativeApi(): NativeApi {
         transport.request(WS_METHODS.serverDeleteLinearCredential, input),
       setProjectLinearBinding: (input) =>
         transport.request(WS_METHODS.serverSetProjectLinearBinding, input),
+      setGitSettings: (input) => transport.request(WS_METHODS.serverSetGitSettings, input),
       upsertKeybinding: (input) => transport.request(WS_METHODS.serverUpsertKeybinding, input),
     },
     orchestration: {

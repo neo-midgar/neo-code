@@ -1,4 +1,4 @@
-import { queryOptions } from "@tanstack/react-query";
+import { mutationOptions, queryOptions, type QueryClient } from "@tanstack/react-query";
 import { ProjectId } from "@t3tools/contracts";
 import { ensureNativeApi } from "~/nativeApi";
 
@@ -6,6 +6,7 @@ export const serverQueryKeys = {
   all: ["server"] as const,
   config: () => ["server", "config"] as const,
   linearConfig: () => ["server", "linear-config"] as const,
+  gitSettings: () => ["server", "git-settings"] as const,
   linearProjectBindings: () => ["server", "linear-project-bindings"] as const,
   projectLinearBinding: (projectId: string | null) =>
     ["server", "project-linear-binding", projectId] as const,
@@ -28,6 +29,17 @@ export function serverLinearConfigQueryOptions() {
     queryFn: async () => {
       const api = ensureNativeApi();
       return api.server.getLinearConfig();
+    },
+    staleTime: Infinity,
+  });
+}
+
+export function serverGitSettingsQueryOptions() {
+  return queryOptions({
+    queryKey: serverQueryKeys.gitSettings(),
+    queryFn: async () => {
+      const api = ensureNativeApi();
+      return api.server.getGitSettings();
     },
     staleTime: Infinity,
   });
@@ -56,5 +68,18 @@ export function serverLinearProjectBindingsQueryOptions() {
       return api.server.getLinearProjectBindings();
     },
     staleTime: 30_000,
+  });
+}
+
+export function serverSetGitSettingsMutationOptions(input: { queryClient: QueryClient }) {
+  return mutationOptions({
+    mutationKey: ["server", "mutation", "git-settings"] as const,
+    mutationFn: async (payload: { pullRequestWorktreeBranchPrefix: string }) => {
+      const api = ensureNativeApi();
+      return api.server.setGitSettings(payload);
+    },
+    onSuccess: async () => {
+      await input.queryClient.invalidateQueries({ queryKey: serverQueryKeys.gitSettings() });
+    },
   });
 }
