@@ -102,6 +102,7 @@ export interface GitCoreShape {
    */
   readonly prepareCommitContext: (
     cwd: string,
+    filePaths?: readonly string[],
   ) => Effect.Effect<GitPreparedCommitContext | null, GitCommandError>;
 
   /**
