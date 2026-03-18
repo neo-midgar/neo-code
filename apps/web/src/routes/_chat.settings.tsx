@@ -1,10 +1,10 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
-import { type ProviderKind } from "@t3tools/contracts";
+import { type ProviderKind, DEFAULT_GIT_TEXT_GENERATION_MODEL } from "@t3tools/contracts";
 import { normalizePullRequestWorktreeBranchPrefix } from "@t3tools/shared/git";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
+import { getAppModelOptions, MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { usePullRequestWorktreeBranchPrefix } from "../hooks/usePullRequestWorktreeBranchPrefix";
@@ -189,6 +189,17 @@ function SettingsRouteView() {
     },
   });
   const availableEditors = serverConfigQuery.data?.availableEditors;
+
+  const gitTextGenerationModelOptions = getAppModelOptions(
+    "codex",
+    settings.customCodexModels,
+    settings.textGenerationModel,
+  );
+  const selectedGitTextGenerationModelLabel =
+    gitTextGenerationModelOptions.find(
+      (option) =>
+        option.slug === (settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL),
+    )?.name ?? settings.textGenerationModel;
 
   const openKeybindingsFile = useCallback(() => {
     if (!keybindingsConfigPath) return;
@@ -823,8 +834,7 @@ function SettingsRouteView() {
               <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Git</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Customize generated Git naming defaults used by PR worktree preparation. This is
-                  stored server-side so it survives app reinstalls and upgrades.
+                  Customize generated Git naming defaults and text generation model.
                 </p>
               </div>
 
@@ -920,6 +930,55 @@ function SettingsRouteView() {
                   <p className="text-xs text-muted-foreground">{gitSettingsMessage}</p>
                 ) : null}
               </div>
+
+              <div className="mt-4 flex flex-col gap-4 rounded-lg border border-border bg-background px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-foreground">Text generation model</p>
+                  <p className="text-xs text-muted-foreground">
+                    Model used for auto-generated git content.
+                  </p>
+                </div>
+                <Select
+                  value={settings.textGenerationModel ?? DEFAULT_GIT_TEXT_GENERATION_MODEL}
+                  onValueChange={(value) => {
+                    if (value) {
+                      updateSettings({
+                        textGenerationModel: value,
+                      });
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    className="w-full shrink-0 sm:w-48"
+                    aria-label="Git text generation model"
+                  >
+                    <SelectValue>{selectedGitTextGenerationModelLabel}</SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end">
+                    {gitTextGenerationModelOptions.map((option) => (
+                      <SelectItem key={option.slug} value={option.slug}>
+                        {option.name}
+                      </SelectItem>
+                    ))}
+                  </SelectPopup>
+                </Select>
+              </div>
+
+              {settings.textGenerationModel !== defaults.textGenerationModel ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        textGenerationModel: defaults.textGenerationModel,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">

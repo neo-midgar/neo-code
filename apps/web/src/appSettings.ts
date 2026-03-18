@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { Option, Schema } from "effect";
-import { type ProviderKind } from "@t3tools/contracts";
+import { TrimmedNonEmptyString, type ProviderKind } from "@t3tools/contracts";
 import { normalizePullRequestWorktreeBranchPrefix } from "@t3tools/shared/git";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
@@ -41,6 +41,7 @@ const AppSettingsSchema = Schema.Struct({
   pullRequestWorktreeBranchPrefix: Schema.String.check(Schema.isMaxLength(128)).pipe(
     Schema.withConstructorDefault(() => Option.some("t3code")),
   ),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {
