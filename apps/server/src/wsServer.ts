@@ -67,14 +67,13 @@ import {
   resolveAttachmentRelativePath,
 } from "./attachmentPaths";
 
-import { resolveAttachmentPathById } from "./attachmentStore.ts";
+import { createAttachmentId, resolveAttachmentPath, resolveAttachmentPathById } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
 import { makeServerPushBus } from "./wsServer/pushBus.ts";
 import { makeServerReadiness } from "./wsServer/readiness.ts";
 import { decodeJsonResult, formatSchemaError } from "@t3tools/shared/schemaJson";
-import { persistImageAttachmentBytes } from "./chatAttachments.ts";
 import { LinearService } from "./integrations/linear/Services/LinearService.ts";
 import { ServerSettings } from "./serverSettings.ts";
 
@@ -355,24 +354,49 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             });
           }
 
-          return yield* persistImageAttachmentBytes({
-            threadId: turnStartCommand.threadId,
+          const attachmentId = createAttachmentId(turnStartCommand.threadId);
+          if (!attachmentId) {
+            return yield* new RouteRequestError({
+              message: "Failed to create a safe attachment id.",
+            });
+          }
+
+          const persistedAttachment = {
+            type: "image" as const,
+            id: attachmentId,
             name: attachment.name,
-            mimeType: parsed.mimeType,
-            bytes,
-            stateDir: serverConfig.stateDir,
-            fileSystem,
-          }).pipe(
+            mimeType: parsed.mimeType.toLowerCase(),
+            sizeBytes: bytes.byteLength,
+          };
+
+          const attachmentPath = resolveAttachmentPath({
+            attachmentsDir: serverConfig.attachmentsDir,
+            attachment: persistedAttachment,
+          });
+          if (!attachmentPath) {
+            return yield* new RouteRequestError({
+              message: `Failed to resolve persisted path for '${attachment.name}'.`,
+            });
+          }
+
+          yield* fileSystem.makeDirectory(path.dirname(attachmentPath), { recursive: true }).pipe(
             Effect.mapError(
-              (cause) =>
+              () =>
                 new RouteRequestError({
-                  message:
-                    cause instanceof Error
-                      ? cause.message
-                      : `Failed to persist attachment '${attachment.name}'.`,
+                  message: `Failed to create attachment directory for '${attachment.name}'.`,
                 }),
             ),
           );
+          yield* fileSystem.writeFile(attachmentPath, bytes).pipe(
+            Effect.mapError(
+              () =>
+                new RouteRequestError({
+                  message: `Failed to persist attachment '${attachment.name}'.`,
+                }),
+            ),
+          );
+
+          return persistedAttachment;
         }),
       { concurrency: 1 },
     );
@@ -416,11 +440,11 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
             !normalizedRelativePath.includes("/") && !normalizedRelativePath.includes(".");
           const filePath = isIdLookup
             ? resolveAttachmentPathById({
-                stateDir: serverConfig.stateDir,
+                attachmentsDir: serverConfig.attachmentsDir,
                 attachmentId: normalizedRelativePath,
               })
             : resolveAttachmentRelativePath({
-                stateDir: serverConfig.stateDir,
+                attachmentsDir: serverConfig.attachmentsDir,
                 relativePath: normalizedRelativePath,
               });
           if (!filePath) {
