@@ -3752,6 +3752,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       />
       <PullRequestObserverCard
         gitCwd={gitCwd}
+        threadBranch={activeThread?.branch ?? null}
         canCleanupThread={canCleanupClosedPullRequestThread}
         onOpenUrl={(url) => {
           const api = readNativeApi();
@@ -4825,4 +4826,3 @@ const ProposedPlanCard = memo(function ProposedPlanCard({
     </div>
   );
 });
-

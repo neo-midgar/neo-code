@@ -52,6 +52,7 @@ import {
 import { readNativeApi } from "../nativeApi";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { resolveThreadGitTarget, resolveTrackedPullRequest } from "../lib/threadPullRequest";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
 import {
@@ -345,8 +346,7 @@ export default function Sidebar() {
     () =>
       threads.map((thread) => ({
         threadId: thread.id,
-        branch: thread.branch,
-        cwd: thread.worktreePath ?? projectCwdById.get(thread.projectId) ?? null,
+        ...resolveThreadGitTarget(thread, projectCwdById.get(thread.projectId) ?? null),
       })),
     [projectCwdById, threads],
   );
@@ -382,9 +382,13 @@ export default function Sidebar() {
     const map = new Map<ThreadId, ThreadPr>();
     for (const target of threadGitTargets) {
       const status = target.cwd ? statusByCwd.get(target.cwd) : undefined;
-      const branchMatches =
-        target.branch !== null && status?.branch !== null && status?.branch === target.branch;
-      map.set(target.threadId, branchMatches ? (status?.pr ?? null) : null);
+      map.set(
+        target.threadId,
+        resolveTrackedPullRequest({
+          threadBranch: target.branch,
+          status,
+        }),
+      );
     }
     return map;
   }, [threadGitStatusCwds, threadGitStatusQueries, threadGitTargets]);

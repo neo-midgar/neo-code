@@ -20,6 +20,7 @@ import {
   isBotPullRequestFinding,
   stripPullRequestReviewMarkdown,
 } from "~/lib/pullRequestReview";
+import { resolveTrackedPullRequest } from "~/lib/threadPullRequest";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { Spinner } from "./ui/spinner";
@@ -71,6 +72,7 @@ function getPullRequestStateTone(state: "open" | "closed" | "merged"): {
 
 interface PullRequestObserverCardProps {
   gitCwd: string | null;
+  threadBranch: string | null;
   canCleanupThread?: boolean;
   onOpenUrl: (url: string) => void;
   onFixFinding: (input: {
@@ -90,6 +92,7 @@ interface PullRequestObserverCardProps {
 
 export function PullRequestObserverCard({
   gitCwd,
+  threadBranch,
   canCleanupThread = false,
   onOpenUrl,
   onFixFinding,
@@ -98,8 +101,14 @@ export function PullRequestObserverCard({
 }: PullRequestObserverCardProps) {
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [expandedFindingIds, setExpandedFindingIds] = useState<Record<string, boolean>>({});
-  const gitStatusQuery = useQuery(gitStatusQueryOptions(gitCwd));
-  const trackedPr = gitStatusQuery.data?.pr ?? null;
+  const gitStatusQuery = useQuery({
+    ...gitStatusQueryOptions(gitCwd),
+    enabled: gitCwd !== null && threadBranch !== null,
+  });
+  const trackedPr = resolveTrackedPullRequest({
+    threadBranch,
+    status: gitStatusQuery.data,
+  });
   const observationQuery = useQuery({
     ...gitObservePullRequestQueryOptions({
       cwd: gitCwd,
@@ -128,7 +137,7 @@ export function PullRequestObserverCard({
     [visibleFindings],
   );
 
-  if (!gitCwd || !trackedPr) {
+  if (!gitCwd || !threadBranch || !trackedPr) {
     return null;
   }
 
