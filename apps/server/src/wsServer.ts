@@ -633,25 +633,31 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         (project) => project.workspaceRoot === cwd && project.deletedAt === null,
       );
       let bootstrapProjectId: ProjectId;
-      let bootstrapProjectDefaultModel: string;
+      let bootstrapProjectDefaultModelSelection;
 
       if (!existingProject) {
         const createdAt = new Date().toISOString();
         bootstrapProjectId = ProjectId.makeUnsafe(crypto.randomUUID());
         const bootstrapProjectTitle = path.basename(cwd) || "project";
-        bootstrapProjectDefaultModel = "gpt-5-codex";
+        bootstrapProjectDefaultModelSelection = {
+          provider: "codex" as const,
+          model: "gpt-5-codex",
+        };
         yield* orchestrationEngine.dispatch({
           type: "project.create",
           commandId: CommandId.makeUnsafe(crypto.randomUUID()),
           projectId: bootstrapProjectId,
           title: bootstrapProjectTitle,
           workspaceRoot: cwd,
-          defaultModel: bootstrapProjectDefaultModel,
+          defaultModelSelection: bootstrapProjectDefaultModelSelection,
           createdAt,
         });
       } else {
         bootstrapProjectId = existingProject.id;
-        bootstrapProjectDefaultModel = existingProject.defaultModel ?? "gpt-5-codex";
+        bootstrapProjectDefaultModelSelection = existingProject.defaultModelSelection ?? {
+          provider: "codex" as const,
+          model: "gpt-5-codex",
+        };
       }
 
       const existingThread = snapshot.threads.find(
@@ -666,7 +672,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           threadId,
           projectId: bootstrapProjectId,
           title: "New thread",
-          model: bootstrapProjectDefaultModel,
+          modelSelection: bootstrapProjectDefaultModelSelection,
           interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
           runtimeMode: "full-access",
           branch: null,
@@ -706,7 +712,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     Effect.all([closeAllClients, closeWebSocketServer.pipe(Effect.ignoreCause({ log: true }))]),
   );
 
-  const routeRequest = Effect.fnUntraced(function* (request: WebSocketRequest) {
+  const routeRequest = Effect.fnUntraced(function* (ws: WebSocket, request: WebSocketRequest) {
     switch (request.body._tag) {
       case ORCHESTRATION_WS_METHODS.getSnapshot:
         return yield* projectionReadModelQuery.getSnapshot();
@@ -795,7 +801,13 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
       case WS_METHODS.gitRunStackedAction: {
         const body = stripRequestTag(request.body);
-        return yield* gitManager.runStackedAction(body);
+        return yield* gitManager.runStackedAction(body, {
+          actionId: body.actionId,
+          progressReporter: {
+            publish: (event) =>
+              pushBus.publishClient(ws, WS_CHANNELS.gitActionProgress, event).pipe(Effect.asVoid),
+          },
+        });
       }
 
       case WS_METHODS.gitResolvePullRequest: {
@@ -986,7 +998,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       });
     }
 
-    const result = yield* Effect.exit(routeRequest(request.success));
+    const result = yield* Effect.exit(routeRequest(ws, request.success));
     if (Exit.isFailure(result)) {
       return yield* sendWsResponse({
         id: request.success.id,

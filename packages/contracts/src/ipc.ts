@@ -1,5 +1,6 @@
 import type {
   GitCheckoutInput,
+  GitActionProgressEvent,
   GitCreateBranchInput,
   GitDeleteBranchInput,
   GitPreparePullRequestThreadInput,
@@ -176,6 +177,7 @@ export interface NativeApi {
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
+    onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
   };
   linear: {
     getIssue: (input: LinearGetIssueInput) => Promise<LinearGetIssueResult>;
